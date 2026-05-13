@@ -47,6 +47,5 @@ def root():
             "matches": "/api/v1/matches",
             "teams": "/api/v1/teams",
             "analytics": "/api/v1/analytics",
-            "users": "/api/v1/users",
         }
     }
