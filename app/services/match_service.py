@@ -2,17 +2,18 @@
 Service layer for match business logic.
 
 Handles match CRUD operations, filtering, statistics, and synchronization.
+All database operations are delegated to MatchRepository (data access layer).
 """
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_
+from sqlalchemy.orm import Session
 
-from app.models import Match, Tournament, Team, MatchStatistic
 from app.schemas import Match as MatchSchema
 from app.exceptions import MatchNotFound, TournamentNotFound, DatabaseError
 from app.services import BaseService
+from app.repositories.match import MatchRepository
+from app.repositories.tournament import TournamentRepository
 from app.config import logger
 
 
@@ -20,7 +21,18 @@ class MatchService(BaseService):
     """Service for match business logic.
     
     Handles match retrieval with complex filtering, statistics, and sync operations.
+    All database operations are delegated to MatchRepository.
     """
+    
+    def __init__(self, db: Session):
+        """Initialize match service with repositories.
+        
+        Args:
+            db: Database session.
+        """
+        super().__init__(db)
+        self.repository = MatchRepository(db)
+        self.tournament_repository = TournamentRepository(db)
     
     def get_by_id(self, match_id: int) -> MatchSchema:
         """Fetch match by ID or raise MatchNotFound.
@@ -35,11 +47,7 @@ class MatchService(BaseService):
             MatchNotFound: If match_id doesn't exist.
         """
         try:
-            match = self.db.query(Match).options(
-                joinedload(Match.home_team),
-                joinedload(Match.away_team),
-                joinedload(Match.tournament),
-            ).filter_by(id=match_id).first()
+            match = self.repository.find_by_id(match_id)
             
             if not match:
                 logger.warning(
@@ -57,7 +65,7 @@ class MatchService(BaseService):
                 f"Failed to fetch match",
                 extra={"match_id": match_id, "error": str(e)}
             )
-            raise DatabaseError("get_match", str(e))
+            raise
     
     def list_with_filters(
         self,
@@ -82,28 +90,14 @@ class MatchService(BaseService):
             List of MatchSchema objects sorted by match_date descending.
         """
         try:
-            query = self.db.query(Match).options(
-                joinedload(Match.home_team),
-                joinedload(Match.away_team),
+            matches = self.repository.find_with_filters(
+                tournament_id=tournament_id,
+                phase=phase,
+                group=group,
+                status=status,
+                skip=skip,
+                limit=limit,
             )
-            
-            # Apply filters
-            if tournament_id is not None:
-                query = query.filter(Match.tournament_id == tournament_id)
-            
-            if phase is not None:
-                query = query.filter(Match.phase == phase)
-            
-            if group is not None:
-                query = query.filter(Match.group == group)
-            
-            if status is not None:
-                query = query.filter(Match.status == status)
-            
-            # Order and paginate
-            matches = query.order_by(
-                Match.match_date.desc()
-            ).offset(skip).limit(limit).all()
             
             return [MatchSchema.from_orm(m) for m in matches]
         
@@ -116,7 +110,7 @@ class MatchService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("list_matches", str(e))
+            raise
     
     def get_statistics(self, match_id: int) -> Dict[str, Any]:
         """Fetch detailed statistics for a match.

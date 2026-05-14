@@ -1,142 +1,158 @@
 """
-Endpoints para times (seleções)
+Endpoints for team operations.
+
+All endpoints delegate business logic to TeamService. This layer only
+handles request validation, response formatting, and HTTP semantics.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
 
 from app.database import get_db
-from app import models, schemas
+from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema
+from app.services.team_service import TeamService
+from app.exceptions import TeamNotFound, DatabaseError
+from app.config import logger
 
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
 
 
-@router.get("/", response_model=List[schemas.Team])
-def list_teams(
+def get_team_service(db: Session = Depends(get_db)) -> TeamService:
+    """Dependency injection for team service.
+    
+    Args:
+        db: Database session from dependency.
+    
+    Returns:
+        TeamService instance bound to current database session.
+    """
+    return TeamService(db)
+
+
+@router.get("/", response_model=List[TeamSchema], status_code=status.HTTP_200_OK)
+async def list_teams(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
-    db: Session = Depends(get_db)
-):
-    """Lista todos os times"""
-    teams = db.query(models.Team).offset(skip).limit(limit).all()
-    return teams
+    service: TeamService = Depends(get_team_service),
+) -> List[TeamSchema]:
+    """List all teams with pagination.
+    
+    Args:
+        skip: Number of records to skip for pagination (default: 0).
+        limit: Maximum number of records (default: 50, max: 500).
+        service: Injected TeamService instance.
+    
+    Returns:
+        List of teams with basic information.
+    
+    Raises:
+        500: If database query fails.
+    """
+    try:
+        return service.get_all(skip=skip, limit=limit)
+    except DatabaseError as e:
+        logger.error(f"Failed to list teams: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch teams",
+        )
 
 
-@router.get("/{team_id}", response_model=schemas.TeamWithPlayers)
-def get_team(team_id: int, db: Session = Depends(get_db)):
-    """Obtém detalhes de um time com seu elenco"""
-    team = db.query(models.Team).filter(models.Team.id == team_id).first()
+@router.get("/{team_id}", response_model=TeamWithPlayersSchema, status_code=status.HTTP_200_OK)
+async def get_team(
+    team_id: int,
+    service: TeamService = Depends(get_team_service),
+) -> TeamWithPlayersSchema:
+    """Fetch team details with roster.
     
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
+    Returns team information including all associated players.
     
-    return team
+    Args:
+        team_id: ID of the team.
+        service: Injected TeamService instance.
+    
+    Returns:
+        Team with players list.
+    
+    Raises:
+        404: If team not found.
+        500: If database query fails.
+    """
+    try:
+        return service.get_with_players(team_id)
+    except TeamNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to fetch team: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch team",
+        )
 
 
-@router.get("/{team_id}/analytics", response_model=schemas.TeamAnalytics)
-def get_team_analytics(team_id: int, db: Session = Depends(get_db)):
-    """Obtém análises de um time (forma, taxa vitória, etc)"""
-    team = db.query(models.Team).filter(models.Team.id == team_id).first()
+@router.get("/{team_id}/analytics", response_model=Dict[str, Any], status_code=status.HTTP_200_OK)
+async def get_team_analytics(
+    team_id: int,
+    service: TeamService = Depends(get_team_service),
+) -> Dict[str, Any]:
+    """Fetch team analytics from recent matches.
     
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
+    Calculates recent form, win rate, goals per match, and possession stats
+    from the last 10 finished matches.
     
-    # Buscar últimos 10 jogos
-    recent_matches = db.query(models.Match).filter(
-        (models.Match.home_team_id == team_id) | (models.Match.away_team_id == team_id),
-        models.Match.status == "finished"
-    ).order_by(models.Match.match_date.desc()).limit(10).all()
+    Args:
+        team_id: ID of the team.
+        service: Injected TeamService instance.
     
-    # Calcular estatísticas
-    total_matches = len(recent_matches)
-    wins = 0
-    draws = 0
-    losses = 0
-    goals_for = 0
-    goals_against = 0
-    possession_values = []
+    Returns:
+        Dictionary with analytics metrics including form, win rate, goal stats.
     
-    recent_form = []
-    
-    for match in recent_matches:
-        if match.home_team_id == team_id:
-            goals_for += match.home_score or 0
-            goals_against += match.away_score or 0
-            
-            if match.home_score > match.away_score:
-                wins += 1
-                recent_form.insert(0, "W")
-            elif match.home_score == match.away_score:
-                draws += 1
-                recent_form.insert(0, "D")
-            else:
-                losses += 1
-                recent_form.insert(0, "L")
-        else:
-            goals_for += match.away_score or 0
-            goals_against += match.home_score or 0
-            
-            if match.away_score > match.home_score:
-                wins += 1
-                recent_form.insert(0, "W")
-            elif match.away_score == match.home_score:
-                draws += 1
-                recent_form.insert(0, "D")
-            else:
-                losses += 1
-                recent_form.insert(0, "L")
-        
-        # Possession
-        stat = db.query(models.MatchStatistic).filter(
-            models.MatchStatistic.match_id == match.id,
-            models.MatchStatistic.team_id == team_id,
-        ).first()
-        
-        if stat and stat.possession:
-            possession_values.append(stat.possession)
-    
-    win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-    avg_goals_for = (goals_for / total_matches) if total_matches > 0 else 0
-    avg_goals_against = (goals_against / total_matches) if total_matches > 0 else 0
-    avg_possession = (sum(possession_values) / len(possession_values)) if possession_values else None
-    
-    # Top scorers do time
-    top_scorers = db.query(models.Player).filter(
-        models.Player.team_id == team_id
-    ).order_by(models.Player.goals.desc()).limit(5).all()
-    
-    return schemas.TeamAnalytics(
-        team=team,
-        recent_form=recent_form,
-        win_rate=win_rate,
-        average_goals_for=avg_goals_for,
-        average_goals_against=avg_goals_against,
-        average_possession=avg_possession,
-        top_scorers=top_scorers,
-    )
+    Raises:
+        404: If team not found.
+        500: If calculation fails.
+    """
+    try:
+        return service.get_analytics(team_id)
+    except TeamNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to calculate team analytics: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch team analytics",
+        )
 
 
-@router.get("/{team_id}/players", response_model=List[schemas.Player])
-def get_team_players(team_id: int, db: Session = Depends(get_db)):
-    """Lista jogadores de um time"""
-    players = db.query(models.Player).filter(
-        models.Player.team_id == team_id
-    ).all()
+@router.get("/{team_id}/recent-matches", response_model=List[Dict[str, Any]], status_code=status.HTTP_200_OK)
+async def get_team_recent_matches(
+    team_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    service: TeamService = Depends(get_team_service),
+) -> List[Dict[str, Any]]:
+    """Fetch recent finished matches for a team.
     
-    if not players:
-        raise HTTPException(status_code=404, detail="Team has no players")
+    Returns up to the specified number of finished matches, ordered by date descending.
     
-    return players
-
-
-@router.get("/by-code/{code}", response_model=schemas.Team)
-def get_team_by_code(code: str, db: Session = Depends(get_db)):
-    """Obtém time pelo código (ex: 'BRA' para Brasil)"""
-    team = db.query(models.Team).filter(
-        models.Team.code.ilike(code)
-    ).first()
+    Args:
+        team_id: ID of the team.
+        limit: Maximum number of recent matches (default: 10, max: 50).
+        service: Injected TeamService instance.
     
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
+    Returns:
+        List of recent match records with opponent, score, and result.
     
-    return team
+    Raises:
+        404: If team not found.
+        500: If query fails.
+    """
+    try:
+        return service.get_recent_matches(team_id, limit=limit)
+    except TeamNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to fetch recent matches: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch recent matches",
+        )

@@ -1,122 +1,133 @@
 """
-Endpoints para análises e previsões
+Endpoints for analytics operations.
+
+All endpoints delegate business logic to AnalyticsService. This layer only
+handles request validation, response formatting, and HTTP semantics.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+
+from typing import List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
 
 from app.database import get_db
-from app import models, schemas
+from app.services.analytics_service import AnalyticsService
+from app.exceptions import TournamentNotFound, DatabaseError
+from app.config import logger
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
 
-@router.get("/top-scorers", response_model=schemas.TopScorersResponse)
-def get_top_scorers(
-    tournament_id: int = Query(...),
+def get_analytics_service(db: Session = Depends(get_db)) -> AnalyticsService:
+    """Dependency injection for analytics service.
+    
+    Args:
+        db: Database session from dependency.
+    
+    Returns:
+        AnalyticsService instance bound to current database session.
+    """
+    return AnalyticsService(db)
+
+
+@router.get("/top-scorers", response_model=List[Dict[str, Any]], status_code=status.HTTP_200_OK)
+async def get_top_scorers(
+    tournament_id: int = Query(..., description="Tournament ID"),
     limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
-):
-    """Obtém artilheiros de um torneio"""
-    tournament = db.query(models.Tournament).filter(
-        models.Tournament.id == tournament_id
-    ).first()
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> List[Dict[str, Any]]:
+    """Get top goal scorers in a tournament.
     
-    if not tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
+    Returns players ranked by total goals scored in all matches of the tournament.
+    Results should be cached for performance (1 hour TTL recommended).
     
-    # Buscar jogadores que participaram do torneio
-    scorers = db.query(models.Player).join(
-        models.MatchStatistic,
-        models.MatchStatistic.player_id == models.Player.id
-    ).join(
-        models.Match,
-        models.Match.id == models.MatchStatistic.match_id
-    ).filter(
-        models.Match.tournament_id == tournament_id,
-        models.MatchStatistic.goals > 0
-    ).order_by(models.MatchStatistic.goals.desc()).distinct().limit(limit).all()
+    Query Parameters:
+        - tournament_id: Tournament ID (required).
+        - limit: Maximum number of scorers (default: 10, max: 100).
     
-    return schemas.TopScorersResponse(
-        tournament_id=tournament_id,
-        scorers=scorers,
-    )
+    Returns:
+        List of scorers with name, team, position, and total goals.
+    
+    Raises:
+        404: If tournament not found.
+        500: If query fails.
+    """
+    try:
+        return service.get_top_scorers(tournament_id, limit=limit)
+    except TournamentNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to fetch top scorers: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch top scorers",
+        )
 
 
-@router.get("/top-assistants", response_model=List[schemas.Player])
-def get_top_assistants(
-    tournament_id: int = Query(...),
+@router.get("/top-assistants", response_model=List[Dict[str, Any]], status_code=status.HTTP_200_OK)
+async def get_top_assistants(
+    tournament_id: int = Query(..., description="Tournament ID"),
     limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
-):
-    """Obtém melhores assistentes de um torneio"""
-    tournament = db.query(models.Tournament).filter(
-        models.Tournament.id == tournament_id
-    ).first()
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> List[Dict[str, Any]]:
+    """Get top assist providers in a tournament.
     
-    if not tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
+    Returns players ranked by total assists provided in all matches of the tournament.
+    Results should be cached for performance (1 hour TTL recommended).
     
-    # Buscar jogadores com mais assistências
-    assistants = db.query(models.Player).join(
-        models.MatchStatistic,
-        models.MatchStatistic.player_id == models.Player.id
-    ).join(
-        models.Match,
-        models.Match.id == models.MatchStatistic.match_id
-    ).filter(
-        models.Match.tournament_id == tournament_id,
-        models.MatchStatistic.assists > 0
-    ).order_by(models.MatchStatistic.assists.desc()).distinct().limit(limit).all()
+    Query Parameters:
+        - tournament_id: Tournament ID (required).
+        - limit: Maximum number of assistants (default: 10, max: 100).
     
-    return assistants
+    Returns:
+        List of assistants with name, team, position, and total assists.
+    
+    Raises:
+        404: If tournament not found.
+        500: If query fails.
+    """
+    try:
+        return service.get_top_assistants(tournament_id, limit=limit)
+    except TournamentNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to fetch top assistants: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch top assistants",
+        )
 
 
-@router.get("/tournament/{tournament_id}/summary")
-def get_tournament_summary(
+@router.get("/tournaments/{tournament_id}/summary", response_model=Dict[str, Any], status_code=status.HTTP_200_OK)
+async def get_tournament_summary(
     tournament_id: int,
-    db: Session = Depends(get_db)
-):
-    """Obtém resumo geral de um torneio"""
-    tournament = db.query(models.Tournament).filter(
-        models.Tournament.id == tournament_id
-    ).first()
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> Dict[str, Any]:
+    """Get comprehensive tournament summary.
     
-    if not tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
+    Returns aggregate statistics including total matches, goals, teams, and leaders.
+    Results should be cached for performance (1 hour TTL recommended).
     
-    # Contar partidas
-    total_matches = db.query(models.Match).filter(
-        models.Match.tournament_id == tournament_id
-    ).count()
+    Args:
+        tournament_id: ID of the tournament.
+        service: Injected AnalyticsService instance.
     
-    finished_matches = db.query(models.Match).filter(
-        models.Match.tournament_id == tournament_id,
-        models.Match.status == "finished"
-    ).count()
+    Returns:
+        Dictionary with tournament statistics and leaders (top scorer, top assistant).
     
-    # Total de gols
-    total_goals = db.query(
-        models.Match
-    ).filter(
-        models.Match.tournament_id == tournament_id,
-        models.Match.status == "finished"
-    ).with_entities(
-        (models.Match.home_score + models.Match.away_score).label("total")
-    )
-    
-    total_goals_sum = sum([g[0] for g in total_goals.all() if g[0]])
-    
-    # Times participantes
-    participating_teams = db.query(models.Team).join(
-        models.Match,
-        (models.Match.home_team_id == models.Team.id) | 
-        (models.Match.away_team_id == models.Team.id)
-    ).filter(
-        models.Match.tournament_id == tournament_id
-    ).distinct().count()
-    
-    avg_goals_per_match = (total_goals_sum / finished_matches) if finished_matches > 0 else 0
+    Raises:
+        404: If tournament not found.
+        500: If calculation fails.
+    """
+    try:
+        return service.get_tournament_summary(tournament_id)
+    except TournamentNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to fetch tournament summary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch tournament summary",
+        )
     
     return {
         "tournament_id": tournament_id,

@@ -2,14 +2,13 @@
 Service layer for tournament business logic.
 
 Handles tournament-related operations like creation, retrieval, and updates.
-All database operations are abstracted and business rules are enforced here.
+All database operations are delegated to TournamentRepository (data access layer).
+This layer enforces business rules and orchestrates complex operations.
 """
 
 from typing import List, Optional
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-from app.models import Tournament, Match, Team
 from app.schemas import TournamentCreate, Tournament as TournamentSchema
 from app.exceptions import (
     TournamentNotFound,
@@ -17,6 +16,7 @@ from app.exceptions import (
     DatabaseError,
 )
 from app.services import BaseService
+from app.repositories.tournament import TournamentRepository
 from app.config import logger
 
 
@@ -24,8 +24,17 @@ class TournamentService(BaseService):
     """Service for tournament business logic.
     
     Handles tournament CRUD operations, standings calculations, and related
-    queries. All database operations are isolated in this layer.
+    queries. All database operations are delegated to TournamentRepository.
     """
+    
+    def __init__(self, db: Session):
+        """Initialize tournament service with repository.
+        
+        Args:
+            db: Database session.
+        """
+        super().__init__(db)
+        self.repository = TournamentRepository(db)
     
     def create(self, tournament_in: TournamentCreate) -> TournamentSchema:
         """Create a new tournament in the database.
@@ -45,9 +54,9 @@ class TournamentService(BaseService):
         """
         try:
             # Check if tournament already exists
-            existing = self.db.query(Tournament).filter_by(
-                sofascore_id=tournament_in.sofascore_id
-            ).first()
+            existing = self.repository.find_by_sofascore_id(
+                tournament_in.sofascore_id
+            )
             
             if existing:
                 logger.warning(
@@ -64,10 +73,7 @@ class TournamentService(BaseService):
                 )
             
             # Create new tournament
-            tournament = Tournament(**tournament_in.model_dump())
-            self.db.add(tournament)
-            self.commit()
-            self.refresh(tournament)
+            tournament = self.repository.create(tournament_in.model_dump())
             
             logger.info(
                 f"Tournament created successfully",
@@ -83,7 +89,6 @@ class TournamentService(BaseService):
         except DuplicateEntityError:
             raise
         except Exception as e:
-            self.rollback()
             logger.error(
                 f"Failed to create tournament",
                 extra={
@@ -91,7 +96,7 @@ class TournamentService(BaseService):
                     "sofascore_id": tournament_in.sofascore_id,
                 }
             )
-            raise DatabaseError("create_tournament", str(e))
+            raise
     
     def get_by_id(self, tournament_id: int) -> TournamentSchema:
         """Fetch tournament by ID or raise TournamentNotFound.
@@ -108,9 +113,7 @@ class TournamentService(BaseService):
             TournamentNotFound: If tournament_id doesn't exist in database.
         """
         try:
-            tournament = self.db.query(Tournament).filter_by(
-                id=tournament_id
-            ).first()
+            tournament = self.repository.find_by_id(tournament_id)
             
             if not tournament:
                 logger.warning(
@@ -131,7 +134,7 @@ class TournamentService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("get_tournament", str(e))
+            raise
     
     def get_all(
         self,
@@ -148,9 +151,7 @@ class TournamentService(BaseService):
             List of TournamentSchema objects.
         """
         try:
-            tournaments = self.db.query(Tournament).offset(
-                skip
-            ).limit(limit).all()
+            tournaments = self.repository.find_all(skip=skip, limit=limit)
             
             return [
                 TournamentSchema.from_orm(t) for t in tournaments
@@ -164,7 +165,7 @@ class TournamentService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("get_tournaments", str(e))
+            raise
     
     def get_by_sofascore_id(self, sofascore_id: int) -> Optional[TournamentSchema]:
         """Fetch tournament by SofaScore ID.
@@ -176,9 +177,7 @@ class TournamentService(BaseService):
             TournamentSchema if found, None otherwise.
         """
         try:
-            tournament = self.db.query(Tournament).filter_by(
-                sofascore_id=sofascore_id
-            ).first()
+            tournament = self.repository.find_by_sofascore_id(sofascore_id)
             
             if tournament:
                 return TournamentSchema.from_orm(tournament)
@@ -191,7 +190,7 @@ class TournamentService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("get_tournament_by_sofascore_id", str(e))
+            raise
     
     def update(
         self,
@@ -211,19 +210,10 @@ class TournamentService(BaseService):
             TournamentNotFound: If tournament doesn't exist.
         """
         try:
-            tournament = self.db.query(Tournament).filter_by(
-                id=tournament_id
-            ).first()
+            tournament = self.repository.update(tournament_id, tournament_update)
             
             if not tournament:
                 raise TournamentNotFound(tournament_id)
-            
-            for key, value in tournament_update.items():
-                if hasattr(tournament, key):
-                    setattr(tournament, key, value)
-            
-            self.commit()
-            self.refresh(tournament)
             
             logger.info(
                 f"Tournament updated",
@@ -238,7 +228,6 @@ class TournamentService(BaseService):
         except TournamentNotFound:
             raise
         except Exception as e:
-            self.rollback()
             logger.error(
                 f"Failed to update tournament",
                 extra={
@@ -246,7 +235,7 @@ class TournamentService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("update_tournament", str(e))
+            raise
     
     def delete(self, tournament_id: int) -> bool:
         """Delete tournament and all related data.
@@ -261,15 +250,10 @@ class TournamentService(BaseService):
             TournamentNotFound: If tournament doesn't exist.
         """
         try:
-            tournament = self.db.query(Tournament).filter_by(
-                id=tournament_id
-            ).first()
+            success = self.repository.delete(tournament_id)
             
-            if not tournament:
+            if not success:
                 raise TournamentNotFound(tournament_id)
-            
-            self.db.delete(tournament)
-            self.commit()
             
             logger.info(
                 f"Tournament deleted",
@@ -281,7 +265,6 @@ class TournamentService(BaseService):
         except TournamentNotFound:
             raise
         except Exception as e:
-            self.rollback()
             logger.error(
                 f"Failed to delete tournament",
                 extra={
@@ -289,7 +272,7 @@ class TournamentService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("delete_tournament", str(e))
+            raise
     
     def get_standings(
         self,
@@ -311,82 +294,17 @@ class TournamentService(BaseService):
             TournamentNotFound: If tournament doesn't exist.
         """
         try:
-            tournament = self.db.query(Tournament).filter_by(
-                id=tournament_id
-            ).first()
-            
+            # Verify tournament exists
+            tournament = self.repository.find_by_id(tournament_id)
             if not tournament:
                 raise TournamentNotFound(tournament_id)
             
-            # Query all teams in tournament
-            teams = self.db.query(Team).join(
-                Tournament.teams
-            ).filter(
-                Tournament.id == tournament_id
-            ).all()
+            # Calculate and return standings from repository
+            standings = self.repository.get_standings(tournament_id)
             
-            standings = []
-            for team in teams:
-                # Calculate statistics
-                home_matches = self.db.query(Match).filter_by(
-                    tournament_id=tournament_id,
-                    home_team_id=team.id,
-                    status="finished",
-                ).all()
-                
-                away_matches = self.db.query(Match).filter_by(
-                    tournament_id=tournament_id,
-                    away_team_id=team.id,
-                    status="finished",
-                ).all()
-                
-                all_matches = home_matches + away_matches
-                
-                wins = sum(
-                    1 for m in home_matches if m.home_score > m.away_score
-                ) + sum(
-                    1 for m in away_matches if m.away_score > m.home_score
-                )
-                
-                draws = sum(
-                    1 for m in home_matches if m.home_score == m.away_score
-                ) + sum(
-                    1 for m in away_matches if m.away_score == m.home_score
-                )
-                
-                losses = len(all_matches) - wins - draws
-                
-                goals_for = sum(
-                    m.home_score for m in home_matches
-                ) + sum(
-                    m.away_score for m in away_matches
-                )
-                
-                goals_against = sum(
-                    m.away_score for m in home_matches
-                ) + sum(
-                    m.home_score for m in away_matches
-                )
-                
-                points = wins * 3 + draws
-                
-                standings.append({
-                    "team_id": team.id,
-                    "team_name": team.name,
-                    "team_code": team.code,
-                    "matches_played": len(all_matches),
-                    "wins": wins,
-                    "draws": draws,
-                    "losses": losses,
-                    "goals_for": goals_for,
-                    "goals_against": goals_against,
-                    "goal_difference": goals_for - goals_against,
-                    "points": points,
-                })
-            
-            # Sort by points (descending), then by goal difference
-            standings.sort(
-                key=lambda x: (-x["points"], -x["goal_difference"])
+            logger.debug(
+                f"Calculated standings for tournament {tournament_id}",
+                extra={"tournament_id": tournament_id, "teams": len(standings)},
             )
             
             return standings
@@ -401,4 +319,4 @@ class TournamentService(BaseService):
                     "error": str(e),
                 }
             )
-            raise DatabaseError("get_standings", str(e))
+            raise
