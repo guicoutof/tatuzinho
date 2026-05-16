@@ -26,7 +26,8 @@ class SofaScoreDataParser:
         
         # Buscar ou criar
         existing = self.db.query(models.Tournament).filter(
-            models.Tournament.sofascore_id == sofascore_data["id"]
+            models.Tournament.source_id == str(sofascore_data["id"]),
+            models.Tournament.source == "sofascore",
         ).first()
         
         if existing:
@@ -40,7 +41,8 @@ class SofaScoreDataParser:
         season = sofascore_data.get("season", {}).get("year", 2026)
         
         tournament = models.Tournament(
-            sofascore_id=sofascore_data["id"],
+            source_id=str(sofascore_data["id"]),
+            source="sofascore",
             name=name,
             slug=sofascore_data.get("slug", ""),
             season=season,
@@ -61,14 +63,16 @@ class SofaScoreDataParser:
         
         # Buscar ou criar
         existing = self.db.query(models.Team).filter(
-            models.Team.sofascore_id == sofascore_data["id"]
+            models.Team.source_id == sofascore_data["id"],
+            models.Team.source == "sofascore",
         ).first()
         
         if existing:
             return existing
         
         team = models.Team(
-            sofascore_id=sofascore_data["id"],
+            source_id=sofascore_data["id"],
+            source="sofascore",
             name=sofascore_data.get("name", ""),
             code=sofascore_data.get("alpha2", sofascore_data.get("name", "")[:3].upper()),
             country=sofascore_data.get("country", {}).get("name", ""),
@@ -98,7 +102,8 @@ class SofaScoreDataParser:
         
         # Buscar ou criar
         existing = self.db.query(models.Player).filter(
-            models.Player.sofascore_id == sofascore_data["id"]
+            models.Player.source_id == sofascore_data["id"],
+            models.Player.source == "sofascore",
         ).first()
         
         if existing:
@@ -116,7 +121,8 @@ class SofaScoreDataParser:
         position = position_map.get(raw_position, "MID")
         
         player = models.Player(
-            sofascore_id=sofascore_data["id"],
+            source_id=sofascore_data["id"],
+            source="sofascore",
             name=sofascore_data.get("name", ""),
             position=position,
             number=sofascore_data.get("shirtNumber"),
@@ -141,7 +147,8 @@ class SofaScoreDataParser:
         
         # Buscar ou criar
         existing = self.db.query(models.Match).filter(
-            models.Match.sofascore_id == sofascore_data["id"]
+            models.Match.source_id == sofascore_data["id"],
+            models.Match.source == "sofascore",
         ).first()
         
         if existing:
@@ -177,7 +184,8 @@ class SofaScoreDataParser:
             phase = self._map_phase(phase_name)
         
         match = models.Match(
-            sofascore_id=sofascore_data["id"],
+            source_id=sofascore_data["id"],
+            source="sofascore",
             tournament_id=tournament_id,
             home_team_id=home_team.id,
             away_team_id=away_team.id,
@@ -284,7 +292,7 @@ class SofaScoreDataParser:
 
 def sync_tournament_matches(
     db: Session, 
-    tournament_sofascore_id: int,
+    tournament_source_id: str,
     start_date: datetime,
     end_date: datetime
 ):
@@ -293,22 +301,23 @@ def sync_tournament_matches(
     
     Args:
         db: Sessão do banco
-        tournament_sofascore_id: ID do torneio no SofaScore
+        tournament_source_id: ID do torneio no SofaScore
         start_date: Data inicial
         end_date: Data final
     """
     parser = SofaScoreDataParser(db)
     client = SofaScoreClient()
     
-    logger.info(f"Sincronizando torneio {tournament_sofascore_id} de {start_date} a {end_date}")
+    logger.info(f"Sincronizando torneio {tournament_source_id} de {start_date} a {end_date}")
     
     # Buscar torneio localmente
     tournament = db.query(models.Tournament).filter(
-        models.Tournament.sofascore_id == tournament_sofascore_id
+        models.Tournament.source_id == tournament_source_id,
+        models.Tournament.source == "sofascore",
     ).first()
     
     if not tournament:
-        logger.error(f"Tournament {tournament_sofascore_id} not found in database")
+        logger.error(f"Tournament {tournament_source_id} not found in database")
         return
     
     # Buscar partidas no intervalo
@@ -318,7 +327,7 @@ def sync_tournament_matches(
     
     for match_data in matches_data:
         # Filtrar apenas partidas do torneio
-        if match_data.get("tournament", {}).get("id") != tournament_sofascore_id:
+        if match_data.get("tournament", {}).get("id") != int(tournament_source_id):
             continue
         
         try:
@@ -327,9 +336,9 @@ def sync_tournament_matches(
             
             # Se partida terminada, buscar stats detalhadas
             if match.status == "finished":
-                event_detail = client.get_event(match.sofascore_id)
+                event_detail = client.get_event(match.source_id)
                 if event_detail:
-                    stats = client.get_event_statistics(match.sofascore_id)
+                    stats = client.get_event_statistics(match.source_id)
                     if stats:
                         parser.parse_match_statistics(match, stats)
             

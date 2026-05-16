@@ -116,7 +116,7 @@ class DuplicateEntityError(TatuzinhoException):
     
     Args:
         entity_type: Type of entity (e.g., 'Tournament', 'Team').
-        identifier: Unique identifier that caused the conflict (e.g., 'name' or 'sofascore_id').
+        identifier: Unique identifier that caused the conflict (e.g., 'name' or 'source_id').
         value: Value of the identifier.
     """
     def __init__(

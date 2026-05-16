@@ -39,7 +39,7 @@ class TournamentService(BaseService):
     def create(self, tournament_in: TournamentCreate) -> TournamentSchema:
         """Create a new tournament in the database.
         
-        Validates that tournament with same sofascore_id doesn't exist.
+        Validates that tournament with same source_id doesn't exist.
         Raises DuplicateEntityError if tournament already exists.
         
         Args:
@@ -49,27 +49,27 @@ class TournamentService(BaseService):
             TournamentSchema: Newly created tournament with all fields.
         
         Raises:
-            DuplicateEntityError: If tournament with same sofascore_id exists.
+            DuplicateEntityError: If tournament with same source_id exists.
             DatabaseError: If database operation fails.
         """
         try:
             # Check if tournament already exists
-            existing = self.repository.find_by_sofascore_id(
-                tournament_in.sofascore_id
+            existing = self.repository.find_by_source_id(
+                tournament_in.source_id, tournament_in.source
             )
             
             if existing:
                 logger.warning(
                     f"Attempted to create duplicate tournament",
                     extra={
-                        "sofascore_id": tournament_in.sofascore_id,
+                        "source_id": tournament_in.source_id,
                         "name": tournament_in.name,
                     }
                 )
                 raise DuplicateEntityError(
                     entity_type="Tournament",
-                    identifier="sofascore_id",
-                    value=str(tournament_in.sofascore_id),
+                    identifier="source_id",
+                    value=str(tournament_in.source_id),
                 )
             
             # Create new tournament
@@ -80,7 +80,7 @@ class TournamentService(BaseService):
                 extra={
                     "tournament_id": tournament.id,
                     "name": tournament.name,
-                    "sofascore_id": tournament.sofascore_id,
+                    "source_id": tournament.source_id,
                 }
             )
             
@@ -93,7 +93,7 @@ class TournamentService(BaseService):
                 f"Failed to create tournament",
                 extra={
                     "error": str(e),
-                    "sofascore_id": tournament_in.sofascore_id,
+                    "source_id": tournament_in.source_id,
                 }
             )
             raise
@@ -167,26 +167,27 @@ class TournamentService(BaseService):
             )
             raise
     
-    def get_by_sofascore_id(self, sofascore_id: int) -> Optional[TournamentSchema]:
-        """Fetch tournament by SofaScore ID.
+    def get_by_source_id(self, source_id: str, source: str = "sofascore") -> Optional[TournamentSchema]:
+        """Fetch tournament by source ID.
         
         Args:
-            sofascore_id: SofaScore external ID.
+            source_id: External source ID.
+            source: Data source ("sofascore" or "statsbomb").
         
         Returns:
             TournamentSchema if found, None otherwise.
         """
         try:
-            tournament = self.repository.find_by_sofascore_id(sofascore_id)
+            tournament = self.repository.find_by_source_id(source_id, source)
             
             if tournament:
                 return TournamentSchema.from_orm(tournament)
             return None
         except Exception as e:
             logger.error(
-                f"Failed to fetch tournament by sofascore_id",
+                f"Failed to fetch tournament by source_id",
                 extra={
-                    "sofascore_id": sofascore_id,
+                    "source_id": source_id,
                     "error": str(e),
                 }
             )

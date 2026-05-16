@@ -101,11 +101,12 @@ class TeamRepository(BaseRepository[Team]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_sofascore_id(self, sofascore_id: int) -> Optional[Team]:
-        """Find team by SofaScore ID (unique external identifier).
+    def find_by_source_id(self, source_id: int, source: str = "sofascore") -> Optional[Team]:
+        """Find team by source ID and source.
         
         Args:
-            sofascore_id: SofaScore team ID.
+            source_id: External source ID.
+            source: Data source ("sofascore" or "statsbomb").
         
         Returns:
             Team if found, None otherwise.
@@ -115,12 +116,13 @@ class TeamRepository(BaseRepository[Team]):
         """
         try:
             team = self.db.query(Team).filter(
-                Team.sofascore_id == sofascore_id
+                Team.source_id == source_id,
+                Team.source == source,
             ).first()
             
             return team
         except Exception as e:
-            self._handle_db_error("find_by_sofascore_id", e)
+            self._handle_db_error("find_by_source_id", e)
     
     def find_by_code(self, code: str) -> Optional[Team]:
         """Find team by country code (ISO3, case-insensitive).

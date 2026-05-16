@@ -13,14 +13,16 @@ class TournamentBase(BaseModel):
 
 
 class TournamentCreate(TournamentBase):
-    sofascore_id: int
+    source_id: str
+    source: str = "sofascore"
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
 
 
 class Tournament(TournamentBase):
     id: int
-    sofascore_id: int
+    source_id: str
+    source: str
     start_date: Optional[datetime]
     end_date: Optional[datetime]
     created_at: datetime
@@ -38,7 +40,8 @@ class TeamBase(BaseModel):
 
 
 class TeamCreate(TeamBase):
-    sofascore_id: int
+    source_id: int
+    source: str = "sofascore"
     logo_url: Optional[str] = None
 
 
@@ -55,7 +58,8 @@ class TeamStats(BaseModel):
 
 class Team(TeamBase):
     id: int
-    sofascore_id: int
+    source_id: int
+    source: str
     logo_url: Optional[str]
     stats: TeamStats
 
@@ -74,7 +78,8 @@ class PlayerBase(BaseModel):
 
 
 class PlayerCreate(PlayerBase):
-    sofascore_id: int
+    source_id: int
+    source: str = "sofascore"
     number: Optional[int] = None
     birth_date: Optional[datetime] = None
     nationality: Optional[str] = None
@@ -92,9 +97,9 @@ class PlayerStats(BaseModel):
 
 class Player(PlayerBase):
     id: int
-    sofascore_id: int
+    source_id: int
+    source: str
     number: Optional[int]
-    birth_date: Optional[datetime]
     nationality: Optional[str]
     height: Optional[int]
     stats: PlayerStats
@@ -112,7 +117,8 @@ class MatchBase(BaseModel):
 
 
 class MatchCreate(MatchBase):
-    sofascore_id: int
+    source_id: int
+    source: str = "sofascore"
     tournament_id: int
     home_team_id: int
     away_team_id: int
@@ -130,7 +136,8 @@ class MatchResult(BaseModel):
 
 class Match(MatchBase):
     id: int
-    sofascore_id: int
+    source_id: int
+    source: str
     tournament_id: int
     home_team_id: int
     away_team_id: int

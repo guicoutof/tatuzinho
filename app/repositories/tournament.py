@@ -81,11 +81,12 @@ class TournamentRepository(BaseRepository[Tournament]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_sofascore_id(self, sofascore_id: int) -> Optional[Tournament]:
-        """Find tournament by SofaScore ID (unique external identifier).
+    def find_by_source_id(self, source_id: str, source: str = "sofascore") -> Optional[Tournament]:
+        """Find tournament by source ID and source.
         
         Args:
-            sofascore_id: SofaScore tournament ID.
+            source_id: External source ID.
+            source: Data source ("sofascore" or "statsbomb").
         
         Returns:
             Tournament if found, None otherwise.
@@ -95,15 +96,16 @@ class TournamentRepository(BaseRepository[Tournament]):
         """
         try:
             tournament = self.db.query(Tournament).filter(
-                Tournament.sofascore_id == sofascore_id
+                Tournament.source_id == source_id,
+                Tournament.source == source,
             ).first()
             
             if tournament:
-                logger.debug(f"Found tournament with sofascore_id {sofascore_id}")
+                logger.debug(f"Found tournament with source_id {source_id} from {source}")
             
             return tournament
         except Exception as e:
-            self._handle_db_error("find_by_sofascore_id", e)
+            self._handle_db_error("find_by_source_id", e)
     
     def find_by_name(self, name: str) -> Optional[Tournament]:
         """Find tournament by name (case-insensitive).

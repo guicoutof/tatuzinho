@@ -82,11 +82,12 @@ class MatchRepository(BaseRepository[Match]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_sofascore_id(self, sofascore_id: int) -> Optional[Match]:
-        """Find match by SofaScore ID (unique external identifier).
+    def find_by_source_id(self, source_id: int, source: str = "sofascore") -> Optional[Match]:
+        """Find match by source ID and source.
         
         Args:
-            sofascore_id: SofaScore match ID.
+            source_id: External source ID.
+            source: Data source ("sofascore" or "statsbomb").
         
         Returns:
             Match if found, None otherwise.
@@ -96,12 +97,13 @@ class MatchRepository(BaseRepository[Match]):
         """
         try:
             match = self.db.query(Match).filter(
-                Match.sofascore_id == sofascore_id
+                Match.source_id == source_id,
+                Match.source == source,
             ).first()
             
             return match
         except Exception as e:
-            self._handle_db_error("find_by_sofascore_id", e)
+            self._handle_db_error("find_by_source_id", e)
     
     def create(self, obj_in: Dict[str, Any]) -> Match:
         """Create new match.

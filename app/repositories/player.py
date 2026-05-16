@@ -78,11 +78,12 @@ class PlayerRepository(BaseRepository[Player]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_sofascore_id(self, sofascore_id: int) -> Optional[Player]:
-        """Find player by SofaScore ID (unique external identifier).
+    def find_by_source_id(self, source_id: int, source: str = "sofascore") -> Optional[Player]:
+        """Find player by source ID and source.
         
         Args:
-            sofascore_id: SofaScore player ID.
+            source_id: External source ID.
+            source: Data source ("sofascore" or "statsbomb").
         
         Returns:
             Player if found, None otherwise.
@@ -92,12 +93,13 @@ class PlayerRepository(BaseRepository[Player]):
         """
         try:
             player = self.db.query(Player).filter(
-                Player.sofascore_id == sofascore_id
+                Player.source_id == source_id,
+                Player.source == source,
             ).first()
             
             return player
         except Exception as e:
-            self._handle_db_error("find_by_sofascore_id", e)
+            self._handle_db_error("find_by_source_id", e)
     
     def find_by_team(self, team_id: int, skip: int = 0, limit: int = 100) -> List[Player]:
         """Find players by team with pagination.

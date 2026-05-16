@@ -7,7 +7,7 @@ and timestamps for auditing.
 """
 
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, 
+    Column, Integer, String, Float, DateTime,
     ForeignKey, Index, UniqueConstraint, Table
 )
 from sqlalchemy.orm import relationship
@@ -24,7 +24,8 @@ class Tournament(Base):
     
     Attributes:
         id: Primary key (auto-generated).
-        sofascore_id: External ID from SofaScore API (unique).
+        source_id: External ID from source API.
+        source: Data source identifier ("sofascore" or "statsbomb").
         name: Full tournament name (e.g., "FIFA World Cup 2026").
         slug: URL-friendly identifier (e.g., "world-cup-2026").
         season: Year/season of tournament (e.g., 2026).
@@ -38,7 +39,8 @@ class Tournament(Base):
     __tablename__ = "tournaments"
 
     id = Column(Integer, primary_key=True, index=True)
-    sofascore_id = Column(Integer, unique=True, index=True, nullable=False)
+    source_id = Column(String, index=True, nullable=False)
+    source = Column(String, nullable=False, default="sofascore")
     name = Column(String, index=True, nullable=False)
     slug = Column(String, unique=True, nullable=False)
     season = Column(Integer, nullable=False)
@@ -62,8 +64,9 @@ class Tournament(Base):
     )
 
     __table_args__ = (
-        Index("idx_tournament_sofascore_id", sofascore_id),
+        Index("idx_tournament_source", source_id, source),
         Index("idx_tournament_season", season),
+        UniqueConstraint("source_id", "source", name="uq_tournament_source"),
     )
 
 
@@ -76,7 +79,8 @@ class Team(Base):
     
     Attributes:
         id: Primary key (auto-generated).
-        sofascore_id: External ID from SofaScore API (unique).
+        source_id: External ID from source API.
+        source: Data source identifier ("sofascore" or "statsbomb").
         name: Team name (e.g., "Brazil").
         code: ISO3 country code (e.g., "BRA").
         country: Full country name.
@@ -95,9 +99,10 @@ class Team(Base):
     __tablename__ = "teams"
 
     id = Column(Integer, primary_key=True, index=True)
-    sofascore_id = Column(Integer, unique=True, index=True, nullable=False)
+    source_id = Column(Integer, index=True, nullable=False)
+    source = Column(String, nullable=False, default="sofascore")
     name = Column(String, index=True, nullable=False)
-    code = Column(String(3), unique=True, nullable=False)
+    code = Column(String(3), nullable=False)
     country = Column(String, nullable=False)
     logo_url = Column(String, nullable=True)
     
@@ -137,8 +142,9 @@ class Team(Base):
     )
 
     __table_args__ = (
-        Index("idx_team_sofascore_id", sofascore_id),
+        Index("idx_team_source", source_id, source),
         Index("idx_team_code", code),
+        UniqueConstraint("source_id", "source", name="uq_team_source"),
     )
 
 
@@ -150,7 +156,8 @@ class Player(Base):
     
     Attributes:
         id: Primary key (auto-generated).
-        sofascore_id: External ID from SofaScore API (unique).
+        source_id: External ID from source API.
+        source: Data source identifier ("sofascore" or "statsbomb").
         name: Player full name.
         position: Playing position (GK, DEF, MID, FWD).
         number: Shirt number (nullable if not assigned).
@@ -169,7 +176,8 @@ class Player(Base):
     __tablename__ = "players"
 
     id = Column(Integer, primary_key=True, index=True)
-    sofascore_id = Column(Integer, unique=True, index=True, nullable=False)
+    source_id = Column(Integer, index=True, nullable=False)
+    source = Column(String, nullable=False, default="sofascore")
     name = Column(String, index=True, nullable=False)
     position = Column(String, nullable=False)
     number = Column(Integer, nullable=True)
@@ -197,8 +205,9 @@ class Player(Base):
     )
 
     __table_args__ = (
-        Index("idx_player_sofascore_id", sofascore_id),
+        Index("idx_player_source", source_id, source),
         Index("idx_player_team_id", team_id),
+        UniqueConstraint("source_id", "source", name="uq_player_source"),
     )
 
 
@@ -207,7 +216,8 @@ class Match(Base):
     __tablename__ = "matches"
 
     id = Column(Integer, primary_key=True, index=True)
-    sofascore_id = Column(Integer, unique=True, index=True)
+    source_id = Column(Integer, index=True, nullable=False)
+    source = Column(String, nullable=False, default="sofascore")
     
     tournament_id = Column(Integer, ForeignKey("tournaments.id"))
     home_team_id = Column(Integer, ForeignKey("teams.id"))
@@ -239,11 +249,11 @@ class Match(Base):
     predictions = relationship("PredictionCache", back_populates="match", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("idx_match_sofascore_id", sofascore_id),
+        Index("idx_match_source", source_id, source),
         Index("idx_match_date", match_date),
         Index("idx_match_tournament", tournament_id),
         Index("idx_match_status", status),
-        UniqueConstraint("sofascore_id", name="uq_match_sofascore_id"),
+        UniqueConstraint("source_id", "source", name="uq_match_source"),
     )
 
 
