@@ -10,8 +10,5 @@ up:
 down:
 	docker-compose down
 
-logs:
-	docker-compose logs -f postgres
-
 install-deps:
 	pip install -r requirements.txt.
