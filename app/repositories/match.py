@@ -82,12 +82,12 @@ class MatchRepository(BaseRepository[Match]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_source_id(self, source_id: int, source: str = "sofascore") -> Optional[Match]:
+    def find_by_source_id(self, source_id: int, source: str = "statsbomb") -> Optional[Match]:
         """Find match by source ID and source.
         
         Args:
             source_id: External source ID.
-            source: Data source ("sofascore" or "statsbomb").
+            source: Data source ("statsbomb").
         
         Returns:
             Match if found, None otherwise.

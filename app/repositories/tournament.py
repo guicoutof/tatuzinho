@@ -81,12 +81,12 @@ class TournamentRepository(BaseRepository[Tournament]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_source_id(self, source_id: str, source: str = "sofascore") -> Optional[Tournament]:
+    def find_by_source_id(self, source_id: str, source: str = "statsbomb") -> Optional[Tournament]:
         """Find tournament by source ID and source.
         
         Args:
             source_id: External source ID.
-            source: Data source ("sofascore" or "statsbomb").
+            source: Data source ("statsbomb").
         
         Returns:
             Tournament if found, None otherwise.

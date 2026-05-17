@@ -59,6 +59,19 @@ class StatsBombImporter:
     def __init__(self, db: Session):
         self.db = db
         self.stats = {"tournaments": 0, "teams": 0, "matches": 0, "players": 0}
+        self._team_cache: Dict[int, models.Team] = {}
+        self._player_cache: Dict[int, models.Player] = {}
+        self._match_ids: set = set()
+        self._load_caches()
+
+    def _load_caches(self):
+        for t in self.db.query(models.Team).filter(models.Team.source == "statsbomb").all():
+            self._team_cache[t.source_id] = t
+        for p in self.db.query(models.Player).filter(models.Player.source == "statsbomb").all():
+            self._player_cache[p.source_id] = p
+        for m in self.db.query(models.Match.source_id).filter(models.Match.source == "statsbomb").all():
+            self._match_ids.add(m.source_id)
+        logger.info(f"Loaded {len(self._team_cache)} teams, {len(self._player_cache)} players, {len(self._match_ids)} matches from DB")
 
     def load_json(self, path: str) -> Any:
         with open(path, "r") as f:
@@ -88,8 +101,9 @@ class StatsBombImporter:
                 f"(comp={comp_id}, season={season_id})"
             )
             self._import_competition(comp_id, season_id, comp)
+            self.db.commit()
+            logger.info(f"  Committed. Running totals - Teams: {self.stats['teams']}, Matches: {self.stats['matches']}, Players: {self.stats['players']}")
 
-        self.db.commit()
         return self.stats
 
     def _import_competition(
@@ -106,7 +120,10 @@ class StatsBombImporter:
 
         matches_data = self.load_json(matches_path)
 
-        for match_data in matches_data:
+        total = len(matches_data)
+        for i, match_data in enumerate(matches_data):
+            if i > 0 and i % 10 == 0:
+                logger.info(f"  [{i}/{total}] matches imported...")
             self._import_match(tournament, match_data)
 
     def _get_or_create_tournament(
@@ -143,16 +160,9 @@ class StatsBombImporter:
         return tournament
 
     def _get_or_create_team(self, team_id: int, team_name: str) -> models.Team:
-        existing = (
-            self.db.query(models.Team)
-            .filter(
-                models.Team.source_id == team_id,
-                models.Team.source == "statsbomb",
-            )
-            .first()
-        )
-        if existing:
-            return existing
+        cached = self._team_cache.get(team_id)
+        if cached:
+            return cached
 
         code = team_name[:3].upper()
 
@@ -165,6 +175,7 @@ class StatsBombImporter:
         )
         self.db.add(team)
         self.db.flush()
+        self._team_cache[team_id] = team
         self.stats["teams"] += 1
         return team
 
@@ -173,15 +184,7 @@ class StatsBombImporter:
     ):
         match_id = match_data["match_id"]
 
-        existing = (
-            self.db.query(models.Match)
-            .filter(
-                models.Match.source_id == match_id,
-                models.Match.source == "statsbomb",
-            )
-            .first()
-        )
-        if existing:
+        if match_id in self._match_ids:
             return
 
         home_data = match_data["home_team"]
@@ -247,16 +250,9 @@ class StatsBombImporter:
         self, player_data: Dict[str, Any], team: models.Team
     ) -> models.Player:
         player_id = player_data["player_id"]
-        existing = (
-            self.db.query(models.Player)
-            .filter(
-                models.Player.source_id == player_id,
-                models.Player.source == "statsbomb",
-            )
-            .first()
-        )
-        if existing:
-            return existing
+        cached = self._player_cache.get(player_id)
+        if cached:
+            return cached
 
         position = self._map_position(player_data.get("positions", []))
 
@@ -270,6 +266,7 @@ class StatsBombImporter:
         )
         self.db.add(player)
         self.db.flush()
+        self._player_cache[player_id] = player
         self.stats["players"] += 1
         return player
 

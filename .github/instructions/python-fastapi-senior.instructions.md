@@ -30,7 +30,7 @@ Database (app/database.py)
 
 ### ✅ DO
 - Query database only in Repositories
-- Call external APIs (SofaScore) only in Services
+- Call external APIs only in Services
 - Use dependency injection with FastAPI `Depends()`
 - Keep endpoints to 5-10 lines maximum
 
@@ -177,12 +177,6 @@ class DataParsingError(TatuzinhoException):
     def __init__(self, api_name: str, message: str):
         super().__init__(f"Failed to parse {api_name} data: {message}")
 
-class SofaScoreAPIError(TatuzinhoException):
-    """Raised when SofaScore API calls fail after retries."""
-    def __init__(self, endpoint: str, status_code: int, retry_count: int):
-        super().__init__(
-            f"SofaScore API failed for {endpoint} after {retry_count} retries "
-            f"(status: {status_code})"
         )
 
 class DatabaseError(TatuzinhoException):
@@ -203,18 +197,18 @@ def get_tournament_by_id(db: Session, tournament_id: int) -> Tournament:
     return tournament
 
 def parse_match_data(api_response: dict) -> Match:
-    """Parse SofaScore match data with validation."""
+    """Parse external match data with validation."""
     try:
         return Match(
-            sofascore_id=api_response["id"],
+            source_id=api_response["id"],
             home_team_id=api_response["homeTeam"]["id"],
             away_team_id=api_response["awayTeam"]["id"],
             # ...
         )
     except KeyError as e:
-        raise DataParsingError("SofaScore", f"Missing field: {e}")
+        raise DataParsingError("external", f"Missing field: {e}")
     except (TypeError, ValueError) as e:
-        raise DataParsingError("SofaScore", f"Invalid data type: {e}")
+        raise DataParsingError("external", f"Invalid data type: {e}")
 ```
 
 ### ✅ Global Exception Handler (add to main.py)
@@ -308,7 +302,7 @@ logger = setup_logging()
 logger.debug("Starting tournament sync", extra={"tournament_id": 123})
 logger.info("Tournament created successfully", extra={"tournament_id": 123, "name": "World Cup 2022"})
 logger.warning("Slow query detected", extra={"query_time_ms": 1500, "endpoint": "standings"})
-logger.error("Failed to fetch SofaScore data", extra={"attempts": 3, "error": str(e)})
+logger.error("Failed to fetch external data", extra={"attempts": 3, "error": str(e)})
 
 # ❌ Don't
 logger.debug(f"Tournament: {tournament}")  # Inline variables

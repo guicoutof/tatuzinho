@@ -4,9 +4,10 @@ from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+env = os.environ.get("ENV", "development")
+load_dotenv(f".env.{env}")
+load_dotenv(".env", override=False)
 
-# Use variáveis de ambiente diretamente para evitar circular import
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
     "postgresql://postgres:postgres@localhost:5432/tatuzinho_db"
@@ -14,7 +15,6 @@ DATABASE_URL = os.getenv(
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
 DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
 
-# Lazy engine initialization
 engine = create_engine(
     DATABASE_URL,
     pool_size=DB_POOL_SIZE,

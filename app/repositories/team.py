@@ -101,12 +101,12 @@ class TeamRepository(BaseRepository[Team]):
         except Exception as e:
             self._handle_db_error("find_all", e)
     
-    def find_by_source_id(self, source_id: int, source: str = "sofascore") -> Optional[Team]:
+    def find_by_source_id(self, source_id: int, source: str = "statsbomb") -> Optional[Team]:
         """Find team by source ID and source.
         
         Args:
             source_id: External source ID.
-            source: Data source ("sofascore" or "statsbomb").
+            source: Data source ("statsbomb").
         
         Returns:
             Team if found, None otherwise.

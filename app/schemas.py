@@ -3,18 +3,17 @@ from datetime import datetime
 from typing import Optional, List
 
 
-# ============ Tournament Schemas ============
 class TournamentBase(BaseModel):
     name: str
     slug: str
     season: int
-    type: str  # "worldcup", "qualifier"
+    type: str
     country: Optional[str] = None
 
 
 class TournamentCreate(TournamentBase):
     source_id: str
-    source: str = "sofascore"
+    source: str = "statsbomb"
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
 
@@ -32,7 +31,6 @@ class Tournament(TournamentBase):
         from_attributes = True
 
 
-# ============ Team Schemas ============
 class TeamBase(BaseModel):
     name: str
     code: str
@@ -41,7 +39,7 @@ class TeamBase(BaseModel):
 
 class TeamCreate(TeamBase):
     source_id: int
-    source: str = "sofascore"
+    source: str = "statsbomb"
     logo_url: Optional[str] = None
 
 
@@ -71,7 +69,6 @@ class TeamWithPlayers(Team):
     players: List["Player"] = []
 
 
-# ============ Player Schemas ============
 class PlayerBase(BaseModel):
     name: str
     position: str
@@ -79,7 +76,7 @@ class PlayerBase(BaseModel):
 
 class PlayerCreate(PlayerBase):
     source_id: int
-    source: str = "sofascore"
+    source: str = "statsbomb"
     number: Optional[int] = None
     birth_date: Optional[datetime] = None
     nationality: Optional[str] = None
@@ -108,7 +105,6 @@ class Player(PlayerBase):
         from_attributes = True
 
 
-# ============ Match Schemas ============
 class MatchBase(BaseModel):
     match_date: datetime
     status: str
@@ -118,7 +114,7 @@ class MatchBase(BaseModel):
 
 class MatchCreate(MatchBase):
     source_id: int
-    source: str = "sofascore"
+    source: str = "statsbomb"
     tournament_id: int
     home_team_id: int
     away_team_id: int
@@ -157,7 +153,6 @@ class MatchWithDetails(Match):
     tournament: Tournament
 
 
-# ============ Match Statistics Schemas ============
 class MatchStatisticBase(BaseModel):
     possession: Optional[float] = None
     shots: int
@@ -194,7 +189,6 @@ class MatchStatistic(MatchStatisticBase):
         from_attributes = True
 
 
-# ============ Prediction Schemas ============
 class PredictionBase(BaseModel):
     home_win_probability: float = Field(..., ge=0.0, le=1.0)
     draw_probability: float = Field(..., ge=0.0, le=1.0)
@@ -229,7 +223,6 @@ class PredictionWithMatch(Prediction):
     match: MatchWithDetails
 
 
-# ============ Prediction Schemas (Response) ============
 class PredictionResponse(BaseModel):
     home_team: str
     away_team: str
@@ -244,10 +237,9 @@ class PredictionResponse(BaseModel):
     confidence: float
 
 
-# ============ Analytics Schemas (Response) ============
 class TeamAnalytics(BaseModel):
     team: Team
-    recent_form: List[str]  # List of W/D/L
+    recent_form: List[str]
     win_rate: float
     average_goals_for: float
     average_goals_against: float
@@ -273,6 +265,5 @@ class TopScorersResponse(BaseModel):
     scorers: List[Player]
 
 
-# Update forward references
 TeamWithPlayers.model_rebuild()
 PredictionWithMatch.model_rebuild()

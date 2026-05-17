@@ -167,12 +167,12 @@ class TournamentService(BaseService):
             )
             raise
     
-    def get_by_source_id(self, source_id: str, source: str = "sofascore") -> Optional[TournamentSchema]:
+    def get_by_source_id(self, source_id: str, source: str = "statsbomb") -> Optional[TournamentSchema]:
         """Fetch tournament by source ID.
         
         Args:
             source_id: External source ID.
-            source: Data source ("sofascore" or "statsbomb").
+            source: Data source ("statsbomb").
         
         Returns:
             TournamentSchema if found, None otherwise.

@@ -17,7 +17,6 @@ Criado arquivo com hierarquia de exceções:
   - `PlayerNotFound`
   - `MatchNotFound`
   - `DataParsingError`
-  - `SofaScoreAPIError`
   - `DatabaseError`
   - `DuplicateEntityError`
   - `ValidationError`
@@ -66,7 +65,7 @@ Classe `BaseService` com:
 
 Service completo com:
 - CRUD: `create()`, `get_by_id()`, `get_all()`, `update()`, `delete()`
-- Query helpers: `get_by_sofascore_id()`
+- Query helpers: `get_by_source_id()`
 - Lógica de negócio: `get_standings()` (cálculo automático)
 - Type hints 100%
 - Docstrings Google Style
@@ -110,8 +109,6 @@ app/
   ├── models.py              # ✅ UPDATED - Better docstrings
   ├── database.py            # Unchanged
   ├── schemas.py             # Unchanged
-  ├── sofascore_client.py    # Unchanged
-  ├── data_parser.py         # Unchanged
   ├── services/              # ✅ NEW
   │   ├── __init__.py        # BaseService class
   │   └── tournament_service.py
@@ -193,7 +190,7 @@ logger.info(
     extra={
         "tournament_id": tournament.id,
         "name": tournament.name,
-        "sofascore_id": tournament.sofascore_id,
+        "source_id": tournament.source_id,
     }
 )
 # Saída: {"timestamp": "...", "level": "INFO", "tournament_id": 1, ...}
