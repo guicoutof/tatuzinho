@@ -196,6 +196,8 @@ class PredictionBase(BaseModel):
 
 
 class PredictionCreate(PredictionBase):
+    model_config = {"protected_namespaces": ()}
+
     match_id: int
     predicted_home_score: Optional[float] = None
     predicted_away_score: Optional[float] = None
@@ -205,6 +207,8 @@ class PredictionCreate(PredictionBase):
 
 
 class Prediction(PredictionBase):
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
+
     id: int
     match_id: int
     predicted_home_score: Optional[float]
@@ -214,9 +218,6 @@ class Prediction(PredictionBase):
     confidence: float
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class PredictionWithMatch(Prediction):
