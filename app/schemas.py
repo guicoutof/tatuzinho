@@ -229,6 +229,21 @@ class PredictionWithMatch(Prediction):
     match: MatchWithDetails
 
 
+# ============ Prediction Schemas (Response) ============
+class PredictionResponse(BaseModel):
+    home_team: str
+    away_team: str
+    home_team_id: int
+    away_team_id: int
+    home_win_probability: float
+    draw_probability: float
+    away_win_probability: float
+    most_likely_score: str
+    predicted_home_goals: float
+    predicted_away_goals: float
+    confidence: float
+
+
 # ============ Analytics Schemas (Response) ============
 class TeamAnalytics(BaseModel):
     team: Team

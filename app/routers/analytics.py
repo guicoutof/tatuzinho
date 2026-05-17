@@ -5,7 +5,7 @@ All endpoints delegate business logic to AnalyticsService. This layer only
 handles request validation, response formatting, and HTTP semantics.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 

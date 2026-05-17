@@ -126,13 +126,13 @@ class TeamRepository(BaseRepository[Team]):
     
     def find_by_code(self, code: str) -> Optional[Team]:
         """Find team by country code (ISO3, case-insensitive).
-        
+
         Args:
             code: ISO3 country code (e.g., 'BRA', 'FRA').
-        
+
         Returns:
             Team if found, None otherwise.
-        
+
         Raises:
             DatabaseError: If query fails.
         """
@@ -140,10 +140,31 @@ class TeamRepository(BaseRepository[Team]):
             team = self.db.query(Team).filter(
                 Team.code.ilike(code)
             ).first()
-            
+
             return team
         except Exception as e:
             self._handle_db_error("find_by_code", e)
+
+    def find_by_name(self, name: str) -> Optional[Team]:
+        """Find team by name (case-insensitive).
+
+        Args:
+            name: Team name (e.g., 'Brazil', 'brazil').
+
+        Returns:
+            Team if found, None otherwise.
+
+        Raises:
+            DatabaseError: If query fails.
+        """
+        try:
+            team = self.db.query(Team).filter(
+                Team.name.ilike(name)
+            ).first()
+
+            return team
+        except Exception as e:
+            self._handle_db_error("find_by_name", e)
     
     def create(self, obj_in: Dict[str, Any]) -> Team:
         """Create new team.

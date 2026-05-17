@@ -13,7 +13,7 @@ from . import models
 from .database import SessionLocal, engine
 from .config import logger
 from .exceptions import TatuzinhoException
-from .routers import tournaments, matches, teams, analytics
+from .routers import tournaments, matches, teams, analytics, predictions
 
 
 # Create database tables
@@ -31,6 +31,7 @@ app.include_router(tournaments.router)
 app.include_router(matches.router)
 app.include_router(teams.router)
 app.include_router(analytics.router)
+app.include_router(predictions.router)
 
 
 # ============ Global Exception Handlers ============
