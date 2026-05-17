@@ -8,3 +8,5 @@ Makefile
 .env
 .venv
 venv
+logs/
+IMPLEMENTATION_LOG.md
