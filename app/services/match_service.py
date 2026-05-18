@@ -2,7 +2,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 
 from app.models import Match, MatchStatistic
-from app.schemas import Match as MatchSchema
+from app.schemas import Match as MatchSchema, MatchWithDetails
 from app.exceptions import MatchNotFound, TournamentNotFound, DatabaseError
 from app.services import BaseService
 from app.repositories.match import MatchRepository
@@ -16,7 +16,7 @@ class MatchService(BaseService):
         self.repository = MatchRepository(db)
         self.tournament_repository = TournamentRepository(db)
 
-    def get_by_id(self, match_id: int) -> MatchSchema:
+    def get_by_id(self, match_id: int) -> MatchWithDetails:
         try:
             match = self.repository.find_by_id(match_id)
 
@@ -27,7 +27,7 @@ class MatchService(BaseService):
                 )
                 raise MatchNotFound(match_id)
 
-            return MatchSchema.from_orm(match)
+            return MatchWithDetails.from_orm(match)
 
         except MatchNotFound:
             raise
@@ -72,20 +72,20 @@ class MatchService(BaseService):
 
     def get_statistics(self, match_id: int) -> Dict[str, Any]:
         try:
-            match = self.db.query(Match).filter_by(id=match_id).first()
+            match = self.repository.find_by_id(match_id)
 
             if not match:
                 raise MatchNotFound(match_id)
 
-            home_stats = self.db.query(MatchStatistic).filter_by(
-                match_id=match_id,
-                team_id=match.home_team_id,
-            ).first()
+            statistics = self.repository.get_statistics(match_id)
+            home_stats = None
+            away_stats = None
 
-            away_stats = self.db.query(MatchStatistic).filter_by(
-                match_id=match_id,
-                team_id=match.away_team_id,
-            ).first()
+            for stat in statistics:
+                if stat.team_id == match.home_team_id:
+                    home_stats = stat
+                elif stat.team_id == match.away_team_id:
+                    away_stats = stat
 
             result = {
                 "match_id": match_id,
@@ -134,3 +134,21 @@ class MatchService(BaseService):
                 extra={"match_id": match_id, "error": str(e)}
             )
             raise DatabaseError("get_match_statistics", str(e))
+
+
+    def get_by_id_raw(self, match_id: int) -> Match:
+        """Fetch ORM Match by ID, used internally.
+
+        Args:
+            match_id: ID of the match.
+
+        Returns:
+            Match ORM object.
+
+        Raises:
+            MatchNotFound: If match not found.
+        """
+        match = self.db.query(Match).filter_by(id=match_id).first()
+        if not match:
+            raise MatchNotFound(match_id)
+        return match

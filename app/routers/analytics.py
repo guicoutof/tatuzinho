@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services.analytics_service import AnalyticsService
-from app.exceptions import TournamentNotFound, DatabaseError
+from app.exceptions import TournamentNotFound, TeamNotFound, DatabaseError
 from app.config import logger
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
@@ -128,84 +128,39 @@ async def get_tournament_summary(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch tournament summary",
         )
-    
-    return {
-        "tournament_id": tournament_id,
-        "tournament_name": tournament.name,
-        "total_matches": total_matches,
-        "finished_matches": finished_matches,
-        "total_goals": total_goals_sum,
-        "average_goals_per_match": avg_goals_per_match,
-        "participating_teams": participating_teams,
-    }
 
 
-@router.get("/comparison/{team1_id}/{team2_id}")
-def compare_teams(
+@router.get("/comparison/{team1_id}/{team2_id}", status_code=status.HTTP_200_OK)
+async def compare_teams(
     team1_id: int,
     team2_id: int,
     tournament_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db)
-):
-    """Compara dois times"""
-    team1 = db.query(models.Team).filter(models.Team.id == team1_id).first()
-    team2 = db.query(models.Team).filter(models.Team.id == team2_id).first()
-    
-    if not team1 or not team2:
-        raise HTTPException(status_code=404, detail="One or both teams not found")
-    
-    # Buscar histórico entre os dois times
-    head_to_head = db.query(models.Match).filter(
-        ((models.Match.home_team_id == team1_id) & (models.Match.away_team_id == team2_id)) |
-        ((models.Match.home_team_id == team2_id) & (models.Match.away_team_id == team1_id)),
-        models.Match.status == "finished"
-    )
-    
-    if tournament_id:
-        head_to_head = head_to_head.filter(models.Match.tournament_id == tournament_id)
-    
-    h2h_matches = head_to_head.all()
-    
-    team1_wins = 0
-    team2_wins = 0
-    draws = 0
-    
-    for match in h2h_matches:
-        if match.home_team_id == team1_id:
-            if match.home_score > match.away_score:
-                team1_wins += 1
-            elif match.away_score > match.home_score:
-                team2_wins += 1
-            else:
-                draws += 1
-        else:
-            if match.away_score > match.home_score:
-                team1_wins += 1
-            elif match.home_score > match.away_score:
-                team2_wins += 1
-            else:
-                draws += 1
-    
-    return {
-        "team1": {
-            "id": team1.id,
-            "name": team1.name,
-            "wins": team1_wins,
-        },
-        "team2": {
-            "id": team2.id,
-            "name": team2.name,
-            "wins": team2_wins,
-        },
-        "draws": draws,
-        "total_matches": len(h2h_matches),
-        "head_to_head": [
-            {
-                "date": m.match_date,
-                "home": m.home_team.name,
-                "away": m.away_team.name,
-                "score": f"{m.home_score} - {m.away_score}",
-            }
-            for m in h2h_matches
-        ]
-    }
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> Dict[str, Any]:
+    """Compara dois times head-to-head.
+
+    Retorna histórico de confrontos diretos entre duas seleções/times,
+    incluindo vitórias, derrotas, empates e lista de partidas.
+
+    Args:
+        team1_id: ID do primeiro time.
+        team2_id: ID do segundo time.
+        tournament_id: Opcional, filtrar por torneio específico.
+        service: Injected AnalyticsService instance.
+
+    Returns:
+        Dicionário com histórico de confrontos, estatísticas e lista de partidas.
+
+    Raises:
+        404: Se um ou ambos os times não forem encontrados.
+    """
+    try:
+        return service.compare_teams(team1_id, team2_id, tournament_id)
+    except TeamNotFound as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Failed to compare teams: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compare teams",
+        )

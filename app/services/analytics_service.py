@@ -7,10 +7,10 @@ Most analytics operations are read-heavy and benefit from caching.
 
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.models import Player, Match, MatchStatistic, Tournament, Team
-from app.exceptions import TournamentNotFound, DatabaseError
+from app.exceptions import TournamentNotFound, TeamNotFound, DatabaseError
 from app.services import BaseService
 from app.config import logger
 
@@ -276,3 +276,97 @@ class AnalyticsService(BaseService):
                 extra={"tournament_id": tournament_id, "error": str(e)}
             )
             raise DatabaseError("get_tournament_summary", str(e))
+
+    def compare_teams(
+        self,
+        team1_id: int,
+        team2_id: int,
+        tournament_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Compara dois times head-to-head.
+
+        Args:
+            team1_id: ID do primeiro time.
+            team2_id: ID do segundo time.
+            tournament_id: Opcional, filtrar por torneio.
+
+        Returns:
+            Dicionário com histórico de confrontos diretos.
+
+        Raises:
+            TeamNotFound: Se um ou ambos os times não existirem.
+        """
+        try:
+            team1 = self.db.query(Team).filter_by(id=team1_id).first()
+            team2 = self.db.query(Team).filter_by(id=team2_id).first()
+
+            if not team1:
+                raise TeamNotFound(team1_id)
+            if not team2:
+                raise TeamNotFound(team2_id)
+
+            query = self.db.query(Match).filter(
+                or_(
+                    (Match.home_team_id == team1_id) & (Match.away_team_id == team2_id),
+                    (Match.home_team_id == team2_id) & (Match.away_team_id == team1_id),
+                ),
+                Match.status == "finished",
+            )
+
+            if tournament_id:
+                query = query.filter(Match.tournament_id == tournament_id)
+
+            h2h_matches = query.order_by(Match.match_date.desc()).all()
+
+            team1_wins = 0
+            team2_wins = 0
+            draws = 0
+
+            for match in h2h_matches:
+                if match.home_team_id == team1_id:
+                    if match.home_score > match.away_score:
+                        team1_wins += 1
+                    elif match.away_score > match.home_score:
+                        team2_wins += 1
+                    else:
+                        draws += 1
+                else:
+                    if match.away_score > match.home_score:
+                        team1_wins += 1
+                    elif match.home_score > match.away_score:
+                        team2_wins += 1
+                    else:
+                        draws += 1
+
+            return {
+                "team1": {
+                    "id": team1.id,
+                    "name": team1.name,
+                    "wins": team1_wins,
+                },
+                "team2": {
+                    "id": team2.id,
+                    "name": team2.name,
+                    "wins": team2_wins,
+                },
+                "draws": draws,
+                "total_matches": len(h2h_matches),
+                "head_to_head": [
+                    {
+                        "date": m.match_date,
+                        "home": m.home_team.name,
+                        "away": m.away_team.name,
+                        "score": f"{m.home_score} - {m.away_score}",
+                    }
+                    for m in h2h_matches
+                ],
+            }
+
+        except TeamNotFound:
+            raise
+        except Exception as e:
+            logger.error(
+                f"Failed to compare teams",
+                extra={"team1_id": team1_id, "team2_id": team2_id, "error": str(e)}
+            )
+            raise DatabaseError("compare_teams", str(e))

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.schemas import Match as MatchSchema, MatchWithDetails
 from app.services.match_service import MatchService
 from app.exceptions import MatchNotFound, DatabaseError
 from app.config import logger
@@ -14,7 +15,7 @@ def get_match_service(db: Session = Depends(get_db)) -> MatchService:
     return MatchService(db)
 
 
-@router.get("/", response_model=List[Dict[str, Any]], status_code=status.HTTP_200_OK)
+@router.get("/", response_model=List[MatchSchema], status_code=status.HTTP_200_OK)
 async def list_matches(
     tournament_id: Optional[int] = Query(None),
     phase: Optional[str] = Query(None),
@@ -23,9 +24,9 @@ async def list_matches(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     service: MatchService = Depends(get_match_service),
-) -> List[Dict[str, Any]]:
+) -> List[MatchSchema]:
     try:
-        matches = service.list_with_filters(
+        return service.list_with_filters(
             tournament_id=tournament_id,
             phase=phase,
             group=group,
@@ -33,7 +34,6 @@ async def list_matches(
             skip=skip,
             limit=limit,
         )
-        return matches
     except DatabaseError as e:
         logger.error(f"Failed to list matches: {e}")
         raise HTTPException(
@@ -42,11 +42,11 @@ async def list_matches(
         )
 
 
-@router.get("/{match_id}", response_model=Dict[str, Any], status_code=status.HTTP_200_OK)
+@router.get("/{match_id}", response_model=MatchWithDetails, status_code=status.HTTP_200_OK)
 async def get_match(
     match_id: int,
     service: MatchService = Depends(get_match_service),
-) -> Dict[str, Any]:
+) -> MatchWithDetails:
     try:
         return service.get_by_id(match_id)
     except MatchNotFound as e:

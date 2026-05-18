@@ -111,6 +111,7 @@ async def root() -> Dict[str, Any]:
             "matches": "/api/v1/matches",
             "teams": "/api/v1/teams",
             "analytics": "/api/v1/analytics",
+            "predictions": "/api/v1/predictions",
         }
     }
 

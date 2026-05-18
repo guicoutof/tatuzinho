@@ -13,6 +13,8 @@ from app.models import Team, Match, Player, MatchStatistic
 from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema
 from app.exceptions import TeamNotFound, DatabaseError
 from app.services import BaseService
+from app.repositories.team import TeamRepository
+from app.repositories.match import MatchRepository
 from app.config import logger
 
 
@@ -21,6 +23,16 @@ class TeamService(BaseService):
     
     Handles team CRUD operations, statistics calculations, and analytics.
     """
+
+    def __init__(self, db: Session):
+        """Initialize team service with repositories.
+        
+        Args:
+            db: Database session.
+        """
+        super().__init__(db)
+        self.team_repository = TeamRepository(db)
+        self.match_repository = MatchRepository(db)
     
     def get_by_id(self, team_id: int) -> TeamSchema:
         """Fetch team by ID or raise TeamNotFound.
@@ -35,7 +47,7 @@ class TeamService(BaseService):
             TeamNotFound: If team_id doesn't exist in database.
         """
         try:
-            team = self.db.query(Team).filter_by(id=team_id).first()
+            team = self.team_repository.find_by_id(team_id)
             
             if not team:
                 logger.warning(
@@ -68,9 +80,7 @@ class TeamService(BaseService):
             TeamNotFound: If team doesn't exist.
         """
         try:
-            team = self.db.query(Team).options(
-                joinedload(Team.players)
-            ).filter_by(id=team_id).first()
+            team = self.team_repository.find_by_id_with_players(team_id)
             
             if not team:
                 raise TeamNotFound(team_id)
@@ -101,7 +111,7 @@ class TeamService(BaseService):
             List of TeamSchema objects.
         """
         try:
-            teams = self.db.query(Team).offset(skip).limit(limit).all()
+            teams = self.team_repository.find_all(skip=skip, limit=limit)
             return [TeamSchema.from_orm(t) for t in teams]
         except Exception as e:
             logger.error(
@@ -132,15 +142,14 @@ class TeamService(BaseService):
         """
         try:
             # Verify team exists
-            team = self.db.query(Team).filter_by(id=team_id).first()
+            team = self.team_repository.find_by_id(team_id)
             if not team:
                 raise TeamNotFound(team_id)
             
             # Fetch recent matches
-            matches = self.db.query(Match).filter(
-                (Match.home_team_id == team_id) | (Match.away_team_id == team_id),
-                Match.status == "finished",
-            ).order_by(Match.match_date.desc()).limit(limit).all()
+            matches = self.match_repository.find_team_recent_matches(
+                team_id, status="finished", limit=limit
+            )
             
             recent_matches = []
             for match in matches:
@@ -201,15 +210,14 @@ class TeamService(BaseService):
         """
         try:
             # Verify team exists
-            team = self.db.query(Team).filter_by(id=team_id).first()
+            team = self.team_repository.find_by_id(team_id)
             if not team:
                 raise TeamNotFound(team_id)
             
             # Fetch recent matches
-            recent_matches = self.db.query(Match).filter(
-                (Match.home_team_id == team_id) | (Match.away_team_id == team_id),
-                Match.status == "finished",
-            ).order_by(Match.match_date.desc()).limit(10).all()
+            recent_matches = self.match_repository.find_team_recent_matches(
+                team_id, status="finished", limit=10
+            )
             
             # Initialize counters
             total_matches = len(recent_matches)
@@ -241,10 +249,11 @@ class TeamService(BaseService):
                     recent_form.insert(0, "L")
                 
                 # Get possession stats
-                stat = self.db.query(MatchStatistic).filter_by(
-                    match_id=match.id,
-                    team_id=team_id,
-                ).first()
+                stats_list = self.match_repository.get_statistics(match.id)
+                stat = next(
+                    (s for s in stats_list if s.team_id == team_id),
+                    None
+                )
                 
                 if stat and stat.possession:
                     possession_values.append(stat.possession)
