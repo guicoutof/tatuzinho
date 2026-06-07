@@ -6,9 +6,10 @@ of both teams, using the classic Poisson regression model for football.
 """
 
 import math
+import datetime
 from typing import List, Optional, Dict, Any, Tuple
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models import Team, Match
@@ -57,12 +58,8 @@ class PredictionService(BaseService):
 
             league_avg_home, league_avg_away = self._get_league_averages()
 
-            home_attack, home_defense = self._get_team_strengths(
-                home_team_id, is_home=True
-            )
-            away_attack, away_defense = self._get_team_strengths(
-                away_team_id, is_home=False
-            )
+            home_attack, home_defense = self._get_weighted_team_strengths(home_team_id)
+            away_attack, away_defense = self._get_weighted_team_strengths(away_team_id)
 
             avg_attack = (league_avg_home + league_avg_away) / 2
             avg_defense = avg_attack
@@ -81,6 +78,7 @@ class PredictionService(BaseService):
             home_win_prob = 0.0
             draw_prob = 0.0
             away_win_prob = 0.0
+            over_25_prob = 0.0
 
             max_prob = 0.0
             most_likely_home = 0
@@ -99,12 +97,15 @@ class PredictionService(BaseService):
                         draw_prob += prob
                     else:
                         away_win_prob += prob
+                    if h + a > 2:
+                        over_25_prob += prob
 
             total = home_win_prob + draw_prob + away_win_prob
             if total > 0:
                 home_win_prob = round(home_win_prob / total * 100, 1)
                 draw_prob = round(draw_prob / total * 100, 1)
                 away_win_prob = round(away_win_prob / total * 100, 1)
+                over_25_prob = round(over_25_prob / total * 100, 1)
 
             confidence = self._calculate_confidence(home_team_id, away_team_id)
 
@@ -129,6 +130,7 @@ class PredictionService(BaseService):
                 "home_win_probability": home_win_prob,
                 "draw_probability": draw_prob,
                 "away_win_probability": away_win_prob,
+                "over_25_probability": over_25_prob,
                 "most_likely_score": (
                     f"{most_likely_home}-{most_likely_away}"
                 ),
@@ -177,55 +179,63 @@ class PredictionService(BaseService):
             )
             return 1.5, 1.1
 
-    def _get_team_strengths(
+    def _get_weighted_team_strengths(
         self,
         team_id: int,
-        is_home: bool,
+        decay_factor: float = 0.001,
     ) -> Tuple[float, float]:
-        """Calculate attacking and defensive strength for a team.
+        """Calculate weighted attacking and defensive strength for a team.
 
-        Attack strength = avg goals scored by the team (home or away).
-        Defense strength = avg goals conceded by the team (home or away).
+        Uses all historical matches (home and away) with exponential time decay
+        so recent matches contribute more to the estimate.
 
         Args:
             team_id: ID of the team.
-            is_home: True for home stats, False for away stats.
+            decay_factor: Exponential decay factor per day (default 0.001).
 
         Returns:
             Tuple of (attack_strength, defense_strength).
         """
         try:
-            if is_home:
-                matches = self.db.query(Match).filter(
-                    Match.home_team_id == team_id,
-                    Match.status == "finished",
-                    Match.home_score.isnot(None),
-                    Match.away_score.isnot(None),
-                ).all()
-                goals_for = [m.home_score for m in matches]
-                goals_against = [m.away_score for m in matches]
-            else:
-                matches = self.db.query(Match).filter(
-                    Match.away_team_id == team_id,
-                    Match.status == "finished",
-                    Match.home_score.isnot(None),
-                    Match.away_score.isnot(None),
-                ).all()
-                goals_for = [m.away_score for m in matches]
-                goals_against = [m.home_score for m in matches]
+            today = datetime.date.today()
+            matches = self.db.query(Match).filter(
+                (Match.home_team_id == team_id) | (Match.away_team_id == team_id),
+                Match.status == "finished",
+                Match.home_score.isnot(None),
+                Match.away_score.isnot(None),
+            ).all()
 
-            n = len(goals_for)
-            if n == 0:
+            total_weight = 0.0
+            weighted_goals_for = 0.0
+            weighted_goals_against = 0.0
+
+            for match in matches:
+                if match.match_date is None:
+                    continue
+                days_ago = (today - match.match_date.date()).days
+                if days_ago < 0:
+                    days_ago = 0
+                weight = math.exp(-decay_factor * days_ago)
+                total_weight += weight
+
+                if match.home_team_id == team_id:
+                    weighted_goals_for += match.home_score * weight
+                    weighted_goals_against += match.away_score * weight
+                else:
+                    weighted_goals_for += match.away_score * weight
+                    weighted_goals_against += match.home_score * weight
+
+            if total_weight == 0:
                 return 1.0, 1.0
 
-            attack = sum(goals_for) / n
-            defense = sum(goals_against) / n
+            attack = weighted_goals_for / total_weight
+            defense = weighted_goals_against / total_weight
 
             return attack, defense
         except Exception as e:
             logger.warning(
-                f"Failed to compute team strengths",
-                extra={"team_id": team_id, "is_home": is_home, "error": str(e)},
+                f"Failed to compute weighted team strengths",
+                extra={"team_id": team_id, "error": str(e)},
             )
             return 1.0, 1.0
 

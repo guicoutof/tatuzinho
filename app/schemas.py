@@ -232,6 +232,7 @@ class PredictionResponse(BaseModel):
     home_win_probability: float
     draw_probability: float
     away_win_probability: float
+    over_25_probability: float
     most_likely_score: str
     predicted_home_goals: float
     predicted_away_goals: float
