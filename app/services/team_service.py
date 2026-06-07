@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from app.models import Team, Match, Player, MatchStatistic
-from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema
+from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema, TeamName
+from app.team_names import EN_TO_PT_BR, strip_accents
 from app.exceptions import TeamNotFound, DatabaseError
 from app.services import BaseService
 from app.repositories.team import TeamRepository
@@ -120,6 +121,18 @@ class TeamService(BaseService):
             )
             raise DatabaseError("get_teams", str(e))
     
+    def get_all_names(self) -> List[TeamName]:
+        teams = self.team_repository.find_all(skip=0, limit=500)
+        return [
+            TeamName(
+                id=t.id,
+                name=t.name,
+                name_pt_br=EN_TO_PT_BR.get(strip_accents(t.name)),
+                code=t.code,
+            )
+            for t in teams
+        ]
+
     def get_recent_matches(
         self,
         team_id: int,

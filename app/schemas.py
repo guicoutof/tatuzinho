@@ -261,6 +261,13 @@ class TournamentStanding(BaseModel):
     points: int
 
 
+class TeamName(BaseModel):
+    id: int
+    name: str
+    name_pt_br: Optional[str] = None
+    code: str
+
+
 class TopScorersResponse(BaseModel):
     tournament_id: int
     scorers: List[Player]

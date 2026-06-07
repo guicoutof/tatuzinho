@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema
+from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema, TeamName
 from app.services.team_service import TeamService
 from app.exceptions import TeamNotFound, DatabaseError
 from app.config import logger
@@ -28,6 +28,20 @@ def get_team_service(db: Session = Depends(get_db)) -> TeamService:
         TeamService instance bound to current database session.
     """
     return TeamService(db)
+
+
+@router.get("/", response_model=List[TeamName], status_code=status.HTTP_200_OK)
+async def list_team_names(
+    service: TeamService = Depends(get_team_service),
+) -> List[TeamName]:
+    try:
+        return service.get_all_names()
+    except DatabaseError as e:
+        logger.error(f"Failed to fetch team names: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch team names",
+        )
 
 
 @router.get("/", response_model=List[TeamSchema], status_code=status.HTTP_200_OK)

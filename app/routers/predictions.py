@@ -16,6 +16,7 @@ from app.services.prediction_service import PredictionService
 from app.repositories.team import TeamRepository
 from app.exceptions import TeamNotFound, DatabaseError
 from app.config import logger
+from app.team_names import normalize_team_name
 
 router = APIRouter(prefix="/api/v1/predictions", tags=["predictions"])
 
@@ -47,16 +48,18 @@ def get_team_repository(db: Session = Depends(get_db)) -> TeamRepository:
 def _resolve_team_id(
     team_id: Optional[int],
     team_name: Optional[str],
+    team_code: Optional[str],
     repo: TeamRepository,
     label: str,
 ) -> int:
     """Resolve a team identifier to a team ID.
 
-    Tries team_id first, then falls back to case-insensitive name lookup.
+    Tries team_id first, then team_code, then name lookup.
 
     Args:
         team_id: Team ID if provided.
         team_name: Team name if provided.
+        team_code: Team 3-letter code if provided (e.g. BRA).
         repo: TeamRepository for database lookups.
         label: Label for error messages ("home" or "away").
 
@@ -64,18 +67,27 @@ def _resolve_team_id(
         Resolved team ID.
 
     Raises:
-        HTTPException: If neither or both identifiers are invalid.
+        HTTPException: If none of the identifiers are provided.
     """
-    if not team_id and not team_name:
+    if not team_id and not team_name and not team_code:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Either {label}_team_id or {label}_team is required",
+            detail=f"One of {label}_team_id, {label}_team, or {label}_team_code is required",
         )
 
     if team_id:
         return team_id
 
-    team = repo.find_by_name(team_name)
+    if team_code:
+        team = repo.find_by_code(team_code)
+        if not team:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Team code '{team_code}' not found",
+            )
+        return team.id
+
+    team = repo.find_by_name(normalize_team_name(team_name))
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -90,6 +102,8 @@ async def predict_match(
     away_team_id: Optional[int] = Query(None, description="Away team ID"),
     home_team: Optional[str] = Query(None, description="Home team name (case-insensitive)"),
     away_team: Optional[str] = Query(None, description="Away team name (case-insensitive)"),
+    home_team_code: Optional[str] = Query(None, description="Home team code (e.g. BRA)"),
+    away_team_code: Optional[str] = Query(None, description="Away team code (e.g. ARG)"),
     service: PredictionService = Depends(get_prediction_service),
     repo: TeamRepository = Depends(get_team_repository),
 ) -> PredictionResponse:
@@ -99,25 +113,27 @@ async def predict_match(
     calculate home win, draw, and away win probabilities, plus the most
     likely scoreline.
 
-    Teams can be specified by ID or by name (case-insensitive).
+    Teams can be specified by ID, name (case-insensitive), or 3-letter code.
 
     Query Parameters:
-        - home_team_id: Home team ID (optional if home_team provided).
-        - away_team_id: Away team ID (optional if away_team provided).
-        - home_team: Home team name, case-insensitive (optional if ID provided).
-        - away_team: Away team name, case-insensitive (optional if ID provided).
+        - home_team_id: Home team ID (optional if name or code provided).
+        - away_team_id: Away team ID (optional if name or code provided).
+        - home_team: Home team name, case-insensitive (optional if ID or code provided).
+        - away_team: Away team name, case-insensitive (optional if ID or code provided).
+        - home_team_code: Home team 3-letter code (e.g. BRA).
+        - away_team_code: Away team 3-letter code (e.g. ARG).
 
     Returns:
         PredictionResponse with win probabilities, most likely score, and confidence.
 
     Raises:
         404: If one or both teams are not found.
-        422: If neither ID nor name is provided for a team.
+        422: If no identifier is provided for a team.
         500: If prediction calculation fails.
     """
     try:
-        resolved_home = _resolve_team_id(home_team_id, home_team, repo, "home")
-        resolved_away = _resolve_team_id(away_team_id, away_team, repo, "away")
+        resolved_home = _resolve_team_id(home_team_id, home_team, home_team_code, repo, "home")
+        resolved_away = _resolve_team_id(away_team_id, away_team, away_team_code, repo, "away")
 
         result = service.predict(resolved_home, resolved_away)
 
