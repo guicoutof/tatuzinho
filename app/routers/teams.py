@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas import Team as TeamSchema, TeamWithPlayers as TeamWithPlayersSchema, TeamName
+from app.schemas import TeamWithPlayers as TeamWithPlayersSchema, TeamName
 from app.services.team_service import TeamService
 from app.exceptions import TeamNotFound, DatabaseError
 from app.config import logger
@@ -41,35 +41,6 @@ async def list_team_names(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch team names",
-        )
-
-
-@router.get("/", response_model=List[TeamSchema], status_code=status.HTTP_200_OK)
-async def list_teams(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
-    service: TeamService = Depends(get_team_service),
-) -> List[TeamSchema]:
-    """List all teams with pagination.
-    
-    Args:
-        skip: Number of records to skip for pagination (default: 0).
-        limit: Maximum number of records (default: 50, max: 500).
-        service: Injected TeamService instance.
-    
-    Returns:
-        List of teams with basic information.
-    
-    Raises:
-        500: If database query fails.
-    """
-    try:
-        return service.get_all(skip=skip, limit=limit)
-    except DatabaseError as e:
-        logger.error(f"Failed to list teams: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch teams",
         )
 
 
