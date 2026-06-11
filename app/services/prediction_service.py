@@ -3,6 +3,8 @@ Service layer for match predictions using Poisson distribution.
 
 Predicts match outcomes based on historical attacking and defensive strength
 of both teams, using the classic Poisson regression model for football.
+Home/away distinction is not applied — suitable for international tournaments
+where all venues are effectively neutral.
 """
 
 import math
@@ -25,7 +27,8 @@ class PredictionService(BaseService):
 
     Computes team attacking/defensive strength from historical finished matches,
     then calculates the probability of each possible scoreline using the
-    independent Poisson model.
+    independent Poisson model. Uses a single league average (no home/away
+    distinction), suitable for international tournaments.
     """
 
     def predict(
@@ -56,21 +59,18 @@ class PredictionService(BaseService):
             if not away_team:
                 raise TeamNotFound(away_team_id)
 
-            league_avg_home, league_avg_away = self._get_league_averages()
+            league_avg = self._get_league_average()
 
             home_attack, home_defense = self._get_weighted_team_strengths(home_team_id)
             away_attack, away_defense = self._get_weighted_team_strengths(away_team_id)
 
-            avg_attack = (league_avg_home + league_avg_away) / 2
-            avg_defense = avg_attack
+            home_strength = home_attack / league_avg if league_avg > 0 else 1.0
+            away_def_strength = away_defense / league_avg if league_avg > 0 else 1.0
+            away_strength = away_attack / league_avg if league_avg > 0 else 1.0
+            home_def_strength = home_defense / league_avg if league_avg > 0 else 1.0
 
-            home_strength = home_attack / avg_attack if avg_attack > 0 else 1.0
-            away_def_strength = away_defense / avg_defense if avg_defense > 0 else 1.0
-            away_strength = away_attack / avg_attack if avg_attack > 0 else 1.0
-            home_def_strength = home_defense / avg_defense if avg_defense > 0 else 1.0
-
-            lambda_home = league_avg_home * home_strength * away_def_strength
-            lambda_away = league_avg_away * away_strength * home_def_strength
+            lambda_home = league_avg * home_strength * away_def_strength
+            lambda_away = league_avg * away_strength * home_def_strength
 
             lambda_home = max(lambda_home, 0.1)
             lambda_away = max(lambda_away, 0.1)
@@ -152,32 +152,34 @@ class PredictionService(BaseService):
             )
             raise DatabaseError("predict", str(e))
 
-    def _get_league_averages(self) -> Tuple[float, float]:
-        """Calculate league average goals per match for home and away teams.
+    def _get_league_average(self) -> float:
+        """Calculate league average goals per team per match.
+
+        Uses all finished matches to compute a single average
+        (home/away distinction is not used, suitable for neutral venues
+        such as international tournaments).
 
         Returns:
-            Tuple of (avg_home_goals, avg_away_goals) across all finished matches.
+            Average goals scored per team per match.
         """
         try:
             result = self.db.query(
-                func.avg(Match.home_score).label("avg_home"),
-                func.avg(Match.away_score).label("avg_away"),
+                func.avg((Match.home_score + Match.away_score) / 2.0).label("avg_goals"),
             ).filter(
                 Match.status == "finished",
                 Match.home_score.isnot(None),
                 Match.away_score.isnot(None),
             ).first()
 
-            avg_home = float(result.avg_home) if result and result.avg_home else 1.5
-            avg_away = float(result.avg_away) if result and result.avg_away else 1.1
+            avg_goals = float(result.avg_goals) if result and result.avg_goals else 1.3
 
-            return avg_home, avg_away
+            return avg_goals
         except Exception as e:
             logger.warning(
-                f"Failed to compute league averages, using defaults",
+                f"Failed to compute league average, using default",
                 extra={"error": str(e)},
             )
-            return 1.5, 1.1
+            return 1.3
 
     def _get_weighted_team_strengths(
         self,
