@@ -133,7 +133,7 @@ Acesse a documentação interativa em http://localhost:8000/docs
 
 ## Modelo de Predição (Poisson)
 
-O endpoint `/api/v1/predictions/predict` aceita dois times (por ID ou nome) e retorna as probabilidades de vitória do mandante, empate e vitória do visitante.
+O endpoint `/api/v1/predictions/predict` aceita dois times (por ID, nome ou código) e retorna as probabilidades de vitória do primeiro time, empate e vitória do segundo time. O modelo trata jogos internacionais como campo neutro, sem vantagem fixa de mando.
 
 **Exemplo:**
 ```
@@ -144,9 +144,12 @@ GET /api/v1/predictions/predict?home_team=Brazil&away_team=Argentina
 {
   "home_team": "Brazil",
   "away_team": "Argentina",
+  "home_team_id": 1,
+  "away_team_id": 2,
   "home_win_probability": 45.2,
   "draw_probability": 28.5,
   "away_win_probability": 26.3,
+  "over_25_probability": 48.7,
   "most_likely_score": "1-0",
   "predicted_home_goals": 1.35,
   "predicted_away_goals": 0.89,
@@ -156,12 +159,14 @@ GET /api/v1/predictions/predict?home_team=Brazil&away_team=Argentina
 
 ### Como funciona
 
-1. **Médias da liga**: calcula a média de gols em casa e fora de todas as partidas no banco
-2. **Força dos times**: para cada time, calcula a média de gols marcados (ataque) e sofridos (defesa) em partidas como mandante/visitante
-3. **Razões**: compara a força de cada time com a média da liga
-4. **Gols esperados (λ)**: ajusta as médias pela força de ataque do time e fragilidade da defesa adversária
-5. **Poisson**: para cada placar possível (0x0 a 6x6), calcula `P(k) = (λ^k × e^(-λ)) / k!` e acumula as probabilidades de vitória/empate/derrota
-6. **Confiança**: baseada na quantidade de partidas históricas disponíveis para ambos os times
+1. **Média global**: calcula gols por time por partida usando todas as partidas finalizadas, com peso maior para jogos recentes
+2. **Referência temporal**: usa a data da partida mais recente no banco como âncora de recência, evitando perda artificial de peso em datasets históricos
+3. **Força dos times**: para cada time, calcula gols marcados (ataque) e sofridos (defesa) com ponderação exponencial por recência
+4. **Estabilização**: ajusta ataque e defesa em direção à média global quando há poucas partidas efetivas, reduzindo previsões extremas por amostra pequena
+5. **Gols esperados (λ)**: combina ataque do time com fragilidade defensiva do adversário e limita valores extremos de gols esperados
+6. **Poisson**: calcula os placares de 0x0 a 10x10, acumula vitória/empate/derrota e normaliza a massa de probabilidade
+7. **Over 2.5**: calcula a probabilidade de mais de 2.5 gols diretamente pela distribuição de gols totais, sem depender do limite da grade de placares
+8. **Confiança**: baseada na quantidade equilibrada de partidas efetivas recentes para os dois times
 
 O modelo segue a abordagem clássica de **Maher (1982) / Dixon-Coles (1997)**, assumindo que os gols de cada time seguem uma distribuição de Poisson independente.
 

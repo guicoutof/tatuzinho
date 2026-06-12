@@ -9,9 +9,8 @@ where all venues are effectively neutral.
 
 import math
 import datetime
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Dict, Any, Tuple
 
-from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models import Team, Match
@@ -19,7 +18,11 @@ from app.exceptions import TeamNotFound, DatabaseError
 from app.services import BaseService
 from app.config import logger, MIN_HISTORICAL_MATCHES
 
-MAX_GOALS = 6
+DEFAULT_LEAGUE_AVG = 1.30
+DECAY_FACTOR = 0.001
+MAX_GOALS = 10
+MIN_EXPECTED_GOALS = 0.20
+MAX_EXPECTED_GOALS = 4.50
 
 
 class PredictionService(BaseService):
@@ -61,24 +64,38 @@ class PredictionService(BaseService):
 
             league_avg = self._get_league_average()
 
-            home_attack, home_defense = self._get_weighted_team_strengths(home_team_id)
-            away_attack, away_defense = self._get_weighted_team_strengths(away_team_id)
+            reference_date = self._get_reference_date()
+
+            home_attack, home_defense, home_sample = self._get_weighted_team_strengths(
+                home_team_id,
+                league_avg,
+                reference_date,
+            )
+            away_attack, away_defense, away_sample = self._get_weighted_team_strengths(
+                away_team_id,
+                league_avg,
+                reference_date,
+            )
 
             home_strength = home_attack / league_avg if league_avg > 0 else 1.0
             away_def_strength = away_defense / league_avg if league_avg > 0 else 1.0
             away_strength = away_attack / league_avg if league_avg > 0 else 1.0
             home_def_strength = home_defense / league_avg if league_avg > 0 else 1.0
 
-            lambda_home = league_avg * home_strength * away_def_strength
-            lambda_away = league_avg * away_strength * home_def_strength
-
-            lambda_home = max(lambda_home, 0.1)
-            lambda_away = max(lambda_away, 0.1)
+            lambda_home = self._clamp(
+                league_avg * home_strength * away_def_strength,
+                MIN_EXPECTED_GOALS,
+                MAX_EXPECTED_GOALS,
+            )
+            lambda_away = self._clamp(
+                league_avg * away_strength * home_def_strength,
+                MIN_EXPECTED_GOALS,
+                MAX_EXPECTED_GOALS,
+            )
 
             home_win_prob = 0.0
             draw_prob = 0.0
             away_win_prob = 0.0
-            over_25_prob = 0.0
 
             max_prob = 0.0
             most_likely_home = 0
@@ -97,25 +114,29 @@ class PredictionService(BaseService):
                         draw_prob += prob
                     else:
                         away_win_prob += prob
-                    if h + a > 2:
-                        over_25_prob += prob
 
             total = home_win_prob + draw_prob + away_win_prob
             if total > 0:
                 home_win_prob = round(home_win_prob / total * 100, 1)
                 draw_prob = round(draw_prob / total * 100, 1)
                 away_win_prob = round(away_win_prob / total * 100, 1)
-                over_25_prob = round(over_25_prob / total * 100, 1)
+            over_25_prob = round(
+                self._over_25_probability(lambda_home + lambda_away) * 100,
+                1,
+            )
 
-            confidence = self._calculate_confidence(home_team_id, away_team_id)
+            confidence = self._calculate_confidence(home_sample, away_sample)
 
             logger.info(
                 f"Prediction computed",
                 extra={
                     "home_team": home_team.name,
                     "away_team": away_team.name,
+                    "league_avg": round(league_avg, 2),
                     "lambda_home": round(lambda_home, 2),
                     "lambda_away": round(lambda_away, 2),
+                    "home_effective_matches": round(home_sample, 2),
+                    "away_effective_matches": round(away_sample, 2),
                     "home_win": home_win_prob,
                     "draw": draw_prob,
                     "away_win": away_win_prob,
@@ -155,51 +176,68 @@ class PredictionService(BaseService):
     def _get_league_average(self) -> float:
         """Calculate league average goals per team per match.
 
-        Uses all finished matches to compute a single average
-        (home/away distinction is not used, suitable for neutral venues
-        such as international tournaments).
+        Uses all finished matches with exponential recency weighting to compute
+        a single average. Home/away distinction is not used, which fits neutral
+        international tournaments better than a domestic home advantage model.
 
         Returns:
             Average goals scored per team per match.
         """
         try:
-            result = self.db.query(
-                func.avg((Match.home_score + Match.away_score) / 2.0).label("avg_goals"),
+            reference_date = self._get_reference_date()
+            matches = self.db.query(
+                Match.home_score,
+                Match.away_score,
+                Match.match_date,
             ).filter(
                 Match.status == "finished",
                 Match.home_score.isnot(None),
                 Match.away_score.isnot(None),
-            ).first()
+            ).all()
 
-            avg_goals = float(result.avg_goals) if result and result.avg_goals else 1.3
+            weighted_goals = 0.0
+            weighted_team_matches = 0.0
 
-            return avg_goals
+            for home_score, away_score, match_date in matches:
+                weight = self._match_weight(match_date, reference_date)
+                weighted_goals += (home_score + away_score) * weight
+                weighted_team_matches += 2.0 * weight
+
+            if weighted_team_matches == 0:
+                return DEFAULT_LEAGUE_AVG
+
+            return weighted_goals / weighted_team_matches
         except Exception as e:
             logger.warning(
                 f"Failed to compute league average, using default",
                 extra={"error": str(e)},
             )
-            return 1.3
+            return DEFAULT_LEAGUE_AVG
 
     def _get_weighted_team_strengths(
         self,
         team_id: int,
-        decay_factor: float = 0.001,
-    ) -> Tuple[float, float]:
+        league_avg: float,
+        reference_date: datetime.date,
+        decay_factor: float = DECAY_FACTOR,
+    ) -> Tuple[float, float, float]:
         """Calculate weighted attacking and defensive strength for a team.
 
         Uses all historical matches (home and away) with exponential time decay
-        so recent matches contribute more to the estimate.
+        so recent matches contribute more to the estimate. Raw team rates are
+        shrunk toward the global average so teams with few recent games do not
+        produce extreme predictions.
 
         Args:
             team_id: ID of the team.
+            league_avg: Global goals per team per match average.
+            reference_date: Latest available match date used as recency anchor.
             decay_factor: Exponential decay factor per day (default 0.001).
 
         Returns:
-            Tuple of (attack_strength, defense_strength).
+            Tuple of (attack_strength, defense_strength, effective_matches).
         """
         try:
-            today = datetime.date.today()
             matches = self.db.query(Match).filter(
                 (Match.home_team_id == team_id) | (Match.away_team_id == team_id),
                 Match.status == "finished",
@@ -212,12 +250,7 @@ class PredictionService(BaseService):
             weighted_goals_against = 0.0
 
             for match in matches:
-                if match.match_date is None:
-                    continue
-                days_ago = (today - match.match_date.date()).days
-                if days_ago < 0:
-                    days_ago = 0
-                weight = math.exp(-decay_factor * days_ago)
+                weight = self._match_weight(match.match_date, reference_date, decay_factor)
                 total_weight += weight
 
                 if match.home_team_id == team_id:
@@ -228,18 +261,61 @@ class PredictionService(BaseService):
                     weighted_goals_against += match.home_score * weight
 
             if total_weight == 0:
-                return 1.0, 1.0
+                return league_avg, league_avg, 0.0
 
-            attack = weighted_goals_for / total_weight
-            defense = weighted_goals_against / total_weight
+            raw_attack = weighted_goals_for / total_weight
+            raw_defense = weighted_goals_against / total_weight
+            prior_matches = max(MIN_HISTORICAL_MATCHES, 1)
+            sample_weight = total_weight / (total_weight + prior_matches)
 
-            return attack, defense
+            attack = league_avg + (raw_attack - league_avg) * sample_weight
+            defense = league_avg + (raw_defense - league_avg) * sample_weight
+
+            return max(attack, 0.05), max(defense, 0.05), total_weight
         except Exception as e:
             logger.warning(
                 f"Failed to compute weighted team strengths",
                 extra={"team_id": team_id, "error": str(e)},
             )
-            return 1.0, 1.0
+            return league_avg, league_avg, 0.0
+
+    def _get_reference_date(self) -> datetime.date:
+        """Use the latest finished match date as the recency anchor.
+
+        Anchoring to the dataset avoids silently decaying all historical matches
+        as calendar time passes without a fresh import.
+        """
+        try:
+            latest_match_date = self.db.query(
+                func.max(Match.match_date)
+            ).filter(
+                Match.status == "finished",
+                Match.home_score.isnot(None),
+                Match.away_score.isnot(None),
+            ).scalar()
+
+            if latest_match_date:
+                return latest_match_date.date()
+        except Exception as e:
+            logger.warning(
+                f"Failed to get prediction reference date, using today",
+                extra={"error": str(e)},
+            )
+
+        return datetime.date.today()
+
+    def _match_weight(
+        self,
+        match_date: datetime.datetime,
+        reference_date: datetime.date,
+        decay_factor: float = DECAY_FACTOR,
+    ) -> float:
+        """Calculate exponential recency weight for a match."""
+        if match_date is None:
+            return 0.0
+
+        days_ago = (reference_date - match_date.date()).days
+        return math.exp(-decay_factor * max(days_ago, 0))
 
     def _poisson(self, k: int, lam: float) -> float:
         """Poisson probability mass function: P(X = k) for given lambda.
@@ -253,40 +329,54 @@ class PredictionService(BaseService):
         """
         return (lam ** k) * math.exp(-lam) / math.factorial(k)
 
-    def _calculate_confidence(self, home_team_id: int, away_team_id: int) -> float:
+    def _over_25_probability(self, total_goals_lambda: float) -> float:
+        """Probability that total match goals exceed 2.5."""
+        under_or_equal_2 = sum(
+            self._poisson(goals, total_goals_lambda)
+            for goals in range(3)
+        )
+        return self._clamp(1.0 - under_or_equal_2, 0.0, 1.0)
+
+    def _calculate_confidence(
+        self,
+        home_effective_matches: float,
+        away_effective_matches: float,
+    ) -> float:
         """Calculate prediction confidence based on available data.
 
-        Confidence increases with more historical matches available.
-        Caps at 95% for abundant data.
+        Confidence increases with balanced, recent historical data for both
+        teams. Uses effective matches after recency weighting, not raw counts.
 
         Args:
-            home_team_id: ID of the home team.
-            away_team_id: ID of the away team.
+            home_effective_matches: Weighted historical matches for home team.
+            away_effective_matches: Weighted historical matches for away team.
 
         Returns:
             Confidence percentage (0-95).
         """
         try:
-            home_matches = self.db.query(Match).filter(
-                (Match.home_team_id == home_team_id) | (Match.away_team_id == home_team_id),
-                Match.status == "finished",
-            ).count()
+            if home_effective_matches <= 0 or away_effective_matches <= 0:
+                return 10.0
 
-            away_matches = self.db.query(Match).filter(
-                (Match.home_team_id == away_team_id) | (Match.away_team_id == away_team_id),
-                Match.status == "finished",
-            ).count()
+            required = max(MIN_HISTORICAL_MATCHES, 1)
+            weaker_sample = min(home_effective_matches, away_effective_matches)
+            stronger_sample = max(home_effective_matches, away_effective_matches)
+            balanced_sample_ratio = weaker_sample / stronger_sample
 
-            total_matches = home_matches + away_matches
-            required = MIN_HISTORICAL_MATCHES * 2
+            team_floor = min(weaker_sample / required, 1.0)
+            total_depth = min(
+                (home_effective_matches + away_effective_matches) / (required * 4),
+                1.0,
+            )
 
-            if total_matches >= required * 2:
-                return 95.0
-            elif total_matches >= required:
-                return 75.0
-            elif total_matches >= MIN_HISTORICAL_MATCHES:
-                return 50.0
-            else:
-                return max(10.0, (total_matches / required) * 50.0)
+            confidence = 15.0 + (50.0 * team_floor) + (30.0 * total_depth)
+            confidence *= 0.85 + (0.15 * balanced_sample_ratio)
+
+            return round(self._clamp(confidence, 10.0, 95.0), 1)
         except Exception:
             return 30.0
+
+    @staticmethod
+    def _clamp(value: float, lower: float, upper: float) -> float:
+        """Clamp a float between lower and upper bounds."""
+        return max(lower, min(value, upper))
