@@ -226,13 +226,16 @@ class AnalyticsService(BaseService):
                 Tournament.id == tournament_id
             ).count()
             
-            # Calculate total goals
+            # Calculate total goals from match scorelines. Player event data is
+            # optional in the imported dataset.
             total_goals_result = self.db.query(
-                func.sum(MatchStatistic.goals)
-            ).join(
-                Match, MatchStatistic.match_id == Match.id
+                func.sum(
+                    func.coalesce(Match.home_score, 0)
+                    + func.coalesce(Match.away_score, 0)
+                )
             ).filter(
-                Match.tournament_id == tournament_id
+                Match.tournament_id == tournament_id,
+                Match.status == "finished",
             ).scalar()
             
             total_goals = total_goals_result or 0

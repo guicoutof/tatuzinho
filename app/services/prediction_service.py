@@ -13,7 +13,7 @@ from typing import Dict, Any, Tuple
 
 from sqlalchemy import func
 
-from app.models import Team, Match
+from app.models import Team, Match, MatchStatistic
 from app.exceptions import TeamNotFound, DatabaseError
 from app.services import BaseService
 from app.config import logger, MIN_HISTORICAL_MATCHES
@@ -23,6 +23,10 @@ DECAY_FACTOR = 0.001
 MAX_GOALS = 10
 MIN_EXPECTED_GOALS = 0.20
 MAX_EXPECTED_GOALS = 4.50
+FORM_MODIFIER_WEIGHT = 0.14
+SQUAD_ATTACK_WEIGHT = 0.18
+HEAD_TO_HEAD_WEIGHT = 0.08
+ASSIST_GOAL_VALUE = 0.65
 
 
 class PredictionService(BaseService):
@@ -82,13 +86,52 @@ class PredictionService(BaseService):
             away_strength = away_attack / league_avg if league_avg > 0 else 1.0
             home_def_strength = home_defense / league_avg if league_avg > 0 else 1.0
 
+            home_form_modifier, home_form_sample = self._get_form_modifier(
+                home_team_id,
+                reference_date,
+            )
+            away_form_modifier, away_form_sample = self._get_form_modifier(
+                away_team_id,
+                reference_date,
+            )
+            squad_avg = self._get_global_squad_contribution_average(reference_date)
+            home_squad_modifier, home_squad_sample = self._get_squad_attack_modifier(
+                home_team_id,
+                reference_date,
+                squad_avg,
+            )
+            away_squad_modifier, away_squad_sample = self._get_squad_attack_modifier(
+                away_team_id,
+                reference_date,
+                squad_avg,
+            )
+            home_h2h_modifier, away_h2h_modifier = self._get_head_to_head_modifiers(
+                home_team_id,
+                away_team_id,
+                reference_date,
+            )
+
             lambda_home = self._clamp(
-                league_avg * home_strength * away_def_strength,
+                (
+                    league_avg
+                    * home_strength
+                    * away_def_strength
+                    * home_form_modifier
+                    * home_squad_modifier
+                    * home_h2h_modifier
+                ),
                 MIN_EXPECTED_GOALS,
                 MAX_EXPECTED_GOALS,
             )
             lambda_away = self._clamp(
-                league_avg * away_strength * home_def_strength,
+                (
+                    league_avg
+                    * away_strength
+                    * home_def_strength
+                    * away_form_modifier
+                    * away_squad_modifier
+                    * away_h2h_modifier
+                ),
                 MIN_EXPECTED_GOALS,
                 MAX_EXPECTED_GOALS,
             )
@@ -125,7 +168,14 @@ class PredictionService(BaseService):
                 1,
             )
 
-            confidence = self._calculate_confidence(home_sample, away_sample)
+            confidence = self._calculate_confidence(
+                home_sample,
+                away_sample,
+                home_squad_sample,
+                away_squad_sample,
+                home_form_sample,
+                away_form_sample,
+            )
 
             logger.info(
                 f"Prediction computed",
@@ -137,6 +187,12 @@ class PredictionService(BaseService):
                     "lambda_away": round(lambda_away, 2),
                     "home_effective_matches": round(home_sample, 2),
                     "away_effective_matches": round(away_sample, 2),
+                    "home_form_modifier": round(home_form_modifier, 3),
+                    "away_form_modifier": round(away_form_modifier, 3),
+                    "home_squad_modifier": round(home_squad_modifier, 3),
+                    "away_squad_modifier": round(away_squad_modifier, 3),
+                    "home_h2h_modifier": round(home_h2h_modifier, 3),
+                    "away_h2h_modifier": round(away_h2h_modifier, 3),
                     "home_win": home_win_prob,
                     "draw": draw_prob,
                     "away_win": away_win_prob,
@@ -279,6 +335,216 @@ class PredictionService(BaseService):
             )
             return league_avg, league_avg, 0.0
 
+    def _get_form_modifier(
+        self,
+        team_id: int,
+        reference_date: datetime.date,
+        decay_factor: float = DECAY_FACTOR,
+    ) -> Tuple[float, float]:
+        """Estimate current team form from weighted points and goal difference."""
+        try:
+            matches = self.db.query(Match).filter(
+                (Match.home_team_id == team_id) | (Match.away_team_id == team_id),
+                Match.status == "finished",
+                Match.home_score.isnot(None),
+                Match.away_score.isnot(None),
+            ).all()
+
+            total_weight = 0.0
+            weighted_points = 0.0
+            weighted_goal_diff = 0.0
+
+            for match in matches:
+                weight = self._match_weight(match.match_date, reference_date, decay_factor)
+                total_weight += weight
+
+                if match.home_team_id == team_id:
+                    goals_for = match.home_score
+                    goals_against = match.away_score
+                else:
+                    goals_for = match.away_score
+                    goals_against = match.home_score
+
+                if goals_for > goals_against:
+                    points = 3
+                elif goals_for == goals_against:
+                    points = 1
+                else:
+                    points = 0
+
+                weighted_points += points * weight
+                weighted_goal_diff += (goals_for - goals_against) * weight
+
+            if total_weight == 0:
+                return 1.0, 0.0
+
+            points_per_match = weighted_points / total_weight
+            goal_diff_per_match = weighted_goal_diff / total_weight
+            form_score = ((points_per_match - 1.35) / 1.65) + (goal_diff_per_match / 2.5)
+            modifier = 1.0 + self._clamp(
+                form_score,
+                -1.0,
+                1.0,
+            ) * FORM_MODIFIER_WEIGHT
+
+            return self._clamp(modifier, 0.86, 1.14), total_weight
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute form modifier",
+                extra={"team_id": team_id, "error": str(e)},
+            )
+            return 1.0, 0.0
+
+    def _get_global_squad_contribution_average(
+        self,
+        reference_date: datetime.date,
+    ) -> float:
+        """Average player goal contribution per team match."""
+        try:
+            rows = self.db.query(
+                MatchStatistic.goals,
+                MatchStatistic.assists,
+                Match.match_date,
+            ).join(
+                Match,
+                MatchStatistic.match_id == Match.id,
+            ).filter(
+                Match.status == "finished",
+                MatchStatistic.player_id.isnot(None),
+            ).all()
+
+            weighted_contribution = 0.0
+            weighted_team_matches = 0.0
+
+            for goals, assists, match_date in rows:
+                weight = self._match_weight(match_date, reference_date)
+                weighted_contribution += (
+                    (goals or 0) + ((assists or 0) * ASSIST_GOAL_VALUE)
+                ) * weight
+                weighted_team_matches += weight
+
+            if weighted_team_matches == 0:
+                return DEFAULT_LEAGUE_AVG
+
+            return weighted_contribution / weighted_team_matches
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute global squad contribution average",
+                extra={"error": str(e)},
+            )
+            return DEFAULT_LEAGUE_AVG
+
+    def _get_squad_attack_modifier(
+        self,
+        team_id: int,
+        reference_date: datetime.date,
+        global_average: float,
+    ) -> Tuple[float, float]:
+        """Estimate attacking quality from player goals and assists."""
+        try:
+            rows = self.db.query(
+                MatchStatistic.goals,
+                MatchStatistic.assists,
+                Match.match_date,
+            ).join(
+                Match,
+                MatchStatistic.match_id == Match.id,
+            ).filter(
+                MatchStatistic.team_id == team_id,
+                Match.status == "finished",
+                MatchStatistic.player_id.isnot(None),
+            ).all()
+
+            weighted_contribution = 0.0
+            total_weight = 0.0
+
+            for goals, assists, match_date in rows:
+                weight = self._match_weight(match_date, reference_date)
+                weighted_contribution += (
+                    (goals or 0) + ((assists or 0) * ASSIST_GOAL_VALUE)
+                ) * weight
+                total_weight += weight
+
+            if total_weight == 0 or global_average <= 0:
+                return 1.0, 0.0
+
+            contribution_rate = weighted_contribution / total_weight
+            relative_strength = (contribution_rate / global_average) - 1.0
+            sample_weight = total_weight / (total_weight + max(MIN_HISTORICAL_MATCHES, 1))
+            modifier = 1.0 + self._clamp(
+                relative_strength,
+                -1.0,
+                1.0,
+            ) * SQUAD_ATTACK_WEIGHT * sample_weight
+
+            return self._clamp(modifier, 0.88, 1.16), total_weight
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute squad attack modifier",
+                extra={"team_id": team_id, "error": str(e)},
+            )
+            return 1.0, 0.0
+
+    def _get_head_to_head_modifiers(
+        self,
+        home_team_id: int,
+        away_team_id: int,
+        reference_date: datetime.date,
+    ) -> Tuple[float, float]:
+        """Small correction from direct meetings, capped to avoid overfitting."""
+        try:
+            matches = self.db.query(Match).filter(
+                (
+                    (Match.home_team_id == home_team_id)
+                    & (Match.away_team_id == away_team_id)
+                )
+                | (
+                    (Match.home_team_id == away_team_id)
+                    & (Match.away_team_id == home_team_id)
+                ),
+                Match.status == "finished",
+                Match.home_score.isnot(None),
+                Match.away_score.isnot(None),
+            ).all()
+
+            total_weight = 0.0
+            home_weighted_goal_diff = 0.0
+
+            for match in matches:
+                weight = self._match_weight(match.match_date, reference_date)
+                total_weight += weight
+
+                if match.home_team_id == home_team_id:
+                    home_weighted_goal_diff += (match.home_score - match.away_score) * weight
+                else:
+                    home_weighted_goal_diff += (match.away_score - match.home_score) * weight
+
+            if total_weight == 0:
+                return 1.0, 1.0
+
+            goal_diff_per_match = home_weighted_goal_diff / total_weight
+            sample_weight = min(total_weight / 5.0, 1.0)
+            adjustment = self._clamp(
+                goal_diff_per_match / 2.0,
+                -1.0,
+                1.0,
+            ) * HEAD_TO_HEAD_WEIGHT * sample_weight
+
+            return (
+                self._clamp(1.0 + adjustment, 0.92, 1.08),
+                self._clamp(1.0 - adjustment, 0.92, 1.08),
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute head-to-head modifiers",
+                extra={
+                    "home_team_id": home_team_id,
+                    "away_team_id": away_team_id,
+                    "error": str(e),
+                },
+            )
+            return 1.0, 1.0
+
     def _get_reference_date(self) -> datetime.date:
         """Use the latest finished match date as the recency anchor.
 
@@ -341,6 +607,10 @@ class PredictionService(BaseService):
         self,
         home_effective_matches: float,
         away_effective_matches: float,
+        home_squad_sample: float = 0.0,
+        away_squad_sample: float = 0.0,
+        home_form_sample: float = 0.0,
+        away_form_sample: float = 0.0,
     ) -> float:
         """Calculate prediction confidence based on available data.
 
@@ -368,8 +638,22 @@ class PredictionService(BaseService):
                 (home_effective_matches + away_effective_matches) / (required * 4),
                 1.0,
             )
+            squad_depth = min(
+                (home_squad_sample + away_squad_sample) / (required * 20),
+                1.0,
+            )
+            form_depth = min(
+                (home_form_sample + away_form_sample) / (required * 4),
+                1.0,
+            )
 
-            confidence = 15.0 + (50.0 * team_floor) + (30.0 * total_depth)
+            confidence = (
+                12.0
+                + (45.0 * team_floor)
+                + (23.0 * total_depth)
+                + (12.0 * squad_depth)
+                + (8.0 * form_depth)
+            )
             confidence *= 0.85 + (0.15 * balanced_sample_ratio)
 
             return round(self._clamp(confidence, 10.0, 95.0), 1)

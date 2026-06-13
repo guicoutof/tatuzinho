@@ -4,8 +4,8 @@ API de análise de partidas de futebol com previsão de resultados usando modelo
 
 ## Stack
 
-- **Python 3.12+** / **FastAPI**
-- **PostgreSQL** via **Supabase** (ou Docker local)
+- **Python 3.11+** / **FastAPI**
+- **PostgreSQL** via Docker local ou banco externo compatível
 - **Redis** para cache
 - **SQLAlchemy 2.0** (ORM)
 - **Pydantic v2** (schemas)
@@ -36,7 +36,7 @@ Models (app/models.py)
 ## Pré-requisitos
 
 - Docker e Docker Compose
-- Python 3.12+
+- Python 3.11+
 - Make
 
 ## Instalação
@@ -45,14 +45,14 @@ Models (app/models.py)
 # 1. Clone e entre no diretório
 git clone <repo> && cd tatuzinho
 
-# 2. Configure as variáveis de ambiente
+# 2. Configure as variáveis de ambiente para Docker local
 cp .env.example .env
-# Edite .env com suas credenciais (Supabase ou PostgreSQL local)
+# Para Supabase/PostgreSQL externo, troque DATABASE_URL no .env
 
 # 3. Instale dependências Python
 make install-deps
 
-# 4. Inicie os serviços Docker (PostgreSQL + Redis)
+# 4. Inicie os serviços Docker locais (PostgreSQL + Redis)
 make up
 
 # 5. Inicie o servidor de desenvolvimento
@@ -60,6 +60,24 @@ make start-dev
 ```
 
 Acesse a documentação interativa em http://localhost:8000/docs
+
+### Importação de Dados
+
+Depois que o banco estiver ativo, importe a base StatsBomb e recalcule os dados derivados:
+
+```bash
+make import
+make db-maintenance
+```
+
+O importador lê lineups e eventos de partidas para preencher aparições, minutos estimados, gols, assistências e cartões por jogador. Ao final da importação, a rotina de manutenção sincroniza `tournament_teams` e recalcula estatísticas agregadas de times e jogadores.
+
+Se estiver usando um banco externo, defina `DATABASE_URL` antes dos comandos:
+
+```bash
+DATABASE_URL=postgresql://user:password@host:5432/database make import
+DATABASE_URL=postgresql://user:password@host:5432/database make db-maintenance
+```
 
 ## Comandos
 
@@ -71,13 +89,14 @@ Acesse a documentação interativa em http://localhost:8000/docs
 | `make down` | Para containers Docker |
 | `make install-deps` | Instala dependências Python |
 | `make import` | Importa dados do StatsBomb para o banco |
+| `make db-maintenance` | Sincroniza relações e recalcula estatísticas derivadas |
 | `make db-push` | Push do schema para o banco remoto |
 
 ## Variáveis de Ambiente
 
 | Variável | Padrão | Descrição |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/tatuzinho_db` | Conexão com banco |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/tatuzinho_dev` | Conexão com banco |
 | `DB_POOL_SIZE` | `20` | Tamanho do pool de conexões |
 | `DB_POOL_RECYCLE` | `3600` | Reciclagem de conexões (s) |
 | `DEBUG` | `False` | Modo debug |
@@ -88,6 +107,11 @@ Acesse a documentação interativa em http://localhost:8000/docs
 | `BACKFILL_YEARS` | `2` | Anos de backfill |
 | `PREDICTION_MODEL_PATH` | `/tmp/prediction_model.pkl` | Caminho do modelo |
 | `MIN_HISTORICAL_MATCHES` | `5` | Mínimo de partidas para confiança |
+| `OPENAI_API_KEY` | vazio | Chave opcional para análise de partidas com IA |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL compatível com OpenAI Responses API |
+| `AI_ANALYSIS_MODEL` | `gpt-4.1-mini` | Modelo usado pelo serviço de análise com IA |
+| `AI_WEB_SEARCH_ENABLED` | `True` | Permite busca web quando a análise com IA estiver ativa |
+| `AI_ANALYSIS_TIMEOUT_SECONDS` | `45` | Timeout da chamada de análise com IA |
 
 ## Endpoints da API
 
@@ -163,12 +187,27 @@ GET /api/v1/predictions/predict?home_team=Brazil&away_team=Argentina
 2. **Referência temporal**: usa a data da partida mais recente no banco como âncora de recência, evitando perda artificial de peso em datasets históricos
 3. **Força dos times**: para cada time, calcula gols marcados (ataque) e sofridos (defesa) com ponderação exponencial por recência
 4. **Estabilização**: ajusta ataque e defesa em direção à média global quando há poucas partidas efetivas, reduzindo previsões extremas por amostra pequena
-5. **Gols esperados (λ)**: combina ataque do time com fragilidade defensiva do adversário e limita valores extremos de gols esperados
-6. **Poisson**: calcula os placares de 0x0 a 10x10, acumula vitória/empate/derrota e normaliza a massa de probabilidade
-7. **Over 2.5**: calcula a probabilidade de mais de 2.5 gols diretamente pela distribuição de gols totais, sem depender do limite da grade de placares
-8. **Confiança**: baseada na quantidade equilibrada de partidas efetivas recentes para os dois times
+5. **Forma recente**: aplica um ajuste pequeno com base em pontos ponderados e saldo de gols recente
+6. **Qualidade do elenco**: usa gols e assistências importados dos eventos StatsBomb para ajustar a força ofensiva
+7. **Confronto direto**: aplica uma correção limitada por amostra para histórico entre os dois times
+8. **Gols esperados (λ)**: combina ataque do time, fragilidade defensiva do adversário e os modificadores acima, limitando valores extremos
+9. **Poisson**: calcula os placares de 0x0 a 10x10, acumula vitória/empate/derrota e normaliza a massa de probabilidade
+10. **Over 2.5**: calcula a probabilidade de mais de 2.5 gols diretamente pela distribuição de gols totais, sem depender do limite da grade de placares
+11. **Confiança**: combina volume equilibrado de partidas, profundidade de dados de elenco e amostra de forma recente
 
 O modelo segue a abordagem clássica de **Maher (1982) / Dixon-Coles (1997)**, assumindo que os gols de cada time seguem uma distribuição de Poisson independente.
+
+## Análise de Partidas com IA
+
+`app/services/ai_analysis_service.py` combina a predição local, analytics dos times, partidas recentes, confronto direto e principais jogadores com uma chamada opcional à OpenAI Responses API. Sem `OPENAI_API_KEY`, o serviço retorna uma análise local de fallback e informa que o enriquecimento por IA está desativado.
+
+Para habilitar:
+
+```bash
+OPENAI_API_KEY=sk-... make start-dev
+```
+
+Quando `AI_WEB_SEARCH_ENABLED=True`, o serviço permite busca web para complementar a análise com notícias recentes de escalações, lesões, suspensões e contexto competitivo. Esses dados devem ser tratados como complemento ao histórico local, não como garantia de resultado.
 
 ## Estrutura do Projeto
 
@@ -181,7 +220,7 @@ tatuzinho/
 │   ├── models.py                      # ORM: Tournament, Team, Player, Match...
 │   ├── schemas.py                     # Pydantic schemas
 │   ├── exceptions.py                  # Exceções customizadas
-│   ├── cache.py                       # CacheManager (Redis)
+│   ├── db_maintenance.py              # Rotinas de manutenção derivada do banco
 │   ├── statsbomb_importer.py          # Importador de dados StatsBomb
 │   ├── routers/
 │   │   ├── tournaments.py
@@ -196,6 +235,7 @@ tatuzinho/
 │   │   ├── team_service.py
 │   │   ├── player_service.py
 │   │   ├── analytics_service.py
+│   │   ├── ai_analysis_service.py
 │   │   └── prediction_service.py
 │   └── repositories/
 │       ├── __init__.py                # BaseRepository
@@ -204,6 +244,7 @@ tatuzinho/
 │       ├── team.py
 │       └── player.py
 ├── docker-compose.yml                 # PostgreSQL + Redis
+├── skills/                            # Skills locais para agentes de análise
 ├── requirements.txt
 ├── Makefile
 └── .env.example
@@ -219,7 +260,7 @@ Os dados históricos são importados do [StatsBomb Open Data](https://github.com
 - Copa Africana de Nações (2017, 2021)
 - E outros torneios
 
-Execute `make import` para popular o banco com os dados disponíveis.
+Execute `make import` para popular o banco com os dados disponíveis. Se você já tem dados importados e quer apenas recalcular relações e estatísticas derivadas, execute `make db-maintenance`.
 
 ## Licença
 

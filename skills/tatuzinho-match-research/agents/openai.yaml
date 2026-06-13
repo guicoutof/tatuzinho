@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tatuzinho Match Research"
+  short_description: "Analisa partidas com Tatuzinho e web"
+  default_prompt: "Use $tatuzinho-match-research para analisar uma partida entre dois times com dados locais do Tatuzinho e notícias recentes."

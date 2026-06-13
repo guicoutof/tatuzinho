@@ -52,7 +52,7 @@ async def tatuzinho_exception_handler(
         f"Domain exception raised",
         extra={
             "exception_type": exception_type,
-            "message": str(exc),
+            "error_message": str(exc),
             "path": str(request.url.path),
             "method": request.method,
         }
@@ -78,7 +78,7 @@ async def general_exception_handler(
         f"Unexpected exception",
         extra={
             "exception_type": exc.__class__.__name__,
-            "message": str(exc),
+            "error_message": str(exc),
             "path": str(request.url.path),
             "method": request.method,
         }

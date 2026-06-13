@@ -1,4 +1,4 @@
-.PHONY: help venv install-deps up down dev prod start-dev import db-push clean logs test lint format
+.PHONY: help venv install-deps up down dev prod start-dev import db-maintenance db-push clean logs test lint format
 
 VENV := venv/bin
 PYTHON := $(VENV)/python
@@ -20,6 +20,7 @@ help:
 	@echo ""
 	@echo "📊 Dados:"
 	@echo "  make import         - Importar dados do StatsBomb"
+	@echo "  make db-maintenance - Sincronizar relações e estatísticas derivadas"
 	@echo "  make db-push        - Push do schema para banco remoto"
 	@echo ""
 	@echo "🧹 Limpeza e Logs:"
@@ -54,6 +55,9 @@ prod:
 
 import: venv
 	PYTHONPATH=. $(PYTHON) app/statsbomb_importer.py
+
+db-maintenance:
+	PYTHONPATH=. ENV=development $(PYTHON) app/db_maintenance.py
 
 db-push:
 	bash scripts/db_push.sh
