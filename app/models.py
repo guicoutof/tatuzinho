@@ -85,6 +85,19 @@ class Team(Base):
         back_populates="teams",
     )
 
+    @property
+    def stats(self):
+        return {
+            "matches_played": self.matches_played,
+            "wins": self.wins,
+            "draws": self.draws,
+            "losses": self.losses,
+            "goals_for": self.goals_for,
+            "goals_against": self.goals_against,
+            "goal_difference": self.goal_difference,
+            "points": self.points,
+        }
+
     __table_args__ = (
         Index("idx_team_source", source_id, source),
         Index("idx_team_code", code),
@@ -121,6 +134,16 @@ class Player(Base):
         "MatchStatistic",
         back_populates="player",
     )
+
+    @property
+    def stats(self):
+        return {
+            "matches_played": self.matches_played,
+            "goals": self.goals,
+            "assists": self.assists,
+            "yellow_cards": self.yellow_cards,
+            "red_cards": self.red_cards,
+        }
 
     __table_args__ = (
         Index("idx_player_source", source_id, source),
@@ -163,6 +186,16 @@ class Match(Base):
     away_team = relationship("Team", foreign_keys=[away_team_id], back_populates="away_matches")
     statistics = relationship("MatchStatistic", back_populates="match", cascade="all, delete-orphan")
     predictions = relationship("PredictionCache", back_populates="match", cascade="all, delete-orphan")
+
+    @property
+    def result(self):
+        return {
+            "home_score": self.home_score,
+            "away_score": self.away_score,
+            "home_score_ht": self.home_score_ht,
+            "away_score_ht": self.away_score_ht,
+            "attendance": self.attendance,
+        }
 
     __table_args__ = (
         Index("idx_match_source", source_id, source),

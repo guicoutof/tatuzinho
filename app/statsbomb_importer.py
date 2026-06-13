@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.database import SessionLocal
+from app.db_maintenance import maintain_database
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,9 @@ class StatsBombImporter:
             self.db.commit()
             logger.info(f"  Committed. Running totals - Teams: {self.stats['teams']}, Matches: {self.stats['matches']}, Players: {self.stats['players']}")
 
+        maintain_database(self.db)
+        self.db.commit()
+
         return self.stats
 
     def _import_competition(
@@ -184,9 +188,6 @@ class StatsBombImporter:
     ):
         match_id = match_data["match_id"]
 
-        if match_id in self._match_ids:
-            return
-
         home_data = match_data["home_team"]
         away_data = match_data["away_team"]
 
@@ -196,6 +197,20 @@ class StatsBombImporter:
         away_team = self._get_or_create_team(
             away_data["away_team_id"], away_data["away_team_name"]
         )
+
+        if match_id in self._match_ids:
+            match = (
+                self.db.query(models.Match)
+                .filter(
+                    models.Match.source_id == match_id,
+                    models.Match.source == "statsbomb",
+                )
+                .first()
+            )
+            if match:
+                self._import_lineups(match, home_team, away_team)
+                self._import_events(match)
+            return
 
         match_date_str = match_data["match_date"]
         kick_off = match_data.get("kick_off", "00:00:00.000")
@@ -225,15 +240,17 @@ class StatsBombImporter:
         )
         self.db.add(match)
         self.db.flush()
+        self._match_ids.add(match_id)
         self.stats["matches"] += 1
 
-        self._import_lineups(match_id, home_team, away_team)
+        self._import_lineups(match, home_team, away_team)
+        self._import_events(match)
 
     def _import_lineups(
-        self, match_id: int, home_team: models.Team, away_team: models.Team
+        self, match: models.Match, home_team: models.Team, away_team: models.Team
     ):
         lineup_path = os.path.join(
-            OPEN_DATA_DIR, "data", "lineups", f"{match_id}.json"
+            OPEN_DATA_DIR, "data", "lineups", f"{match.source_id}.json"
         )
         if not os.path.exists(lineup_path):
             return
@@ -244,7 +261,130 @@ class StatsBombImporter:
             team = home_team if team_id == home_team.source_id else away_team
 
             for player_data in lineup_data.get("lineup", []):
-                self._get_or_create_player(player_data, team)
+                player = self._get_or_create_player(player_data, team)
+                if player_data.get("positions"):
+                    self._record_player_appearance(match, player, team, player_data)
+
+    def _record_player_appearance(
+        self,
+        match: models.Match,
+        player: models.Player,
+        team: models.Team,
+        player_data: Dict[str, Any],
+    ) -> None:
+        existing = (
+            self.db.query(models.MatchStatistic)
+            .filter(
+                models.MatchStatistic.match_id == match.id,
+                models.MatchStatistic.player_id == player.id,
+            )
+            .first()
+        )
+        if existing:
+            return
+
+        yellow_cards = 0
+        red_cards = 0
+        for card in player_data.get("cards", []):
+            card_type = card.get("card_type", "").lower()
+            if "yellow" in card_type:
+                yellow_cards += 1
+            if "red" in card_type:
+                red_cards += 1
+
+        match_stat = models.MatchStatistic(
+            match_id=match.id,
+            player_id=player.id,
+            team_id=team.id,
+            yellow_cards=yellow_cards,
+            red_cards=red_cards,
+            minutes_played=self._estimate_minutes_played(player_data.get("positions", [])),
+        )
+        self.db.add(match_stat)
+
+    def _import_events(self, match: models.Match) -> None:
+        events_path = os.path.join(
+            OPEN_DATA_DIR, "data", "events", f"{match.source_id}.json"
+        )
+        if not os.path.exists(events_path):
+            return
+
+        player_stats = (
+            self.db.query(models.MatchStatistic)
+            .join(models.Player, models.MatchStatistic.player_id == models.Player.id)
+            .filter(models.MatchStatistic.match_id == match.id)
+            .all()
+        )
+        stats_by_source_id = {
+            stat.player.source_id: stat
+            for stat in player_stats
+            if stat.player is not None
+        }
+
+        for stat in player_stats:
+            stat.goals = 0
+            stat.assists = 0
+
+        events = self.load_json(events_path)
+        for event in events:
+            event_type = event.get("type", {}).get("name")
+            if event_type == "Shot":
+                outcome = event.get("shot", {}).get("outcome", {}).get("name")
+                if outcome == "Goal":
+                    stat = self._get_event_player_stat(
+                        match,
+                        event,
+                        stats_by_source_id,
+                    )
+                    if stat:
+                        stat.goals += 1
+            elif event_type == "Pass" and event.get("pass", {}).get("goal_assist"):
+                stat = self._get_event_player_stat(
+                    match,
+                    event,
+                    stats_by_source_id,
+                )
+                if stat:
+                    stat.assists += 1
+
+    def _get_event_player_stat(
+        self,
+        match: models.Match,
+        event: Dict[str, Any],
+        stats_by_source_id: Dict[int, models.MatchStatistic],
+    ) -> Optional[models.MatchStatistic]:
+        player_data = event.get("player")
+        if not player_data:
+            return None
+
+        player_source_id = player_data["id"]
+        stat = stats_by_source_id.get(player_source_id)
+        if stat:
+            return stat
+
+        team_source_id = event.get("team", {}).get("id")
+        team = self._team_cache.get(team_source_id)
+        if not team:
+            return None
+
+        player = self._get_or_create_player(
+            {
+                "player_id": player_source_id,
+                "player_name": player_data["name"],
+                "positions": [],
+                "jersey_number": None,
+            },
+            team,
+        )
+        stat = models.MatchStatistic(
+            match_id=match.id,
+            player_id=player.id,
+            team_id=team.id,
+        )
+        self.db.add(stat)
+        self.db.flush()
+        stats_by_source_id[player_source_id] = stat
+        return stat
 
     def _get_or_create_player(
         self, player_data: Dict[str, Any], team: models.Team
@@ -285,6 +425,35 @@ class StatsBombImporter:
         if "forward" in pos_lower or "striker" in pos_lower or "wing" in pos_lower:
             return "FWD"
         return "MID"
+
+    @staticmethod
+    def _estimate_minutes_played(positions: List[Dict[str, Any]]) -> Optional[int]:
+        if not positions:
+            return None
+
+        total_seconds = 0
+        for position in positions:
+            start = StatsBombImporter._time_to_seconds(position.get("from"))
+            end = StatsBombImporter._time_to_seconds(position.get("to"))
+            if end is None:
+                end = 90 * 60
+            if start is not None and end > start:
+                total_seconds += end - start
+
+        if total_seconds == 0:
+            return None
+        return round(total_seconds / 60)
+
+    @staticmethod
+    def _time_to_seconds(value: Optional[str]) -> Optional[int]:
+        if not value:
+            return None
+
+        parts = value.split(":")
+        if len(parts) != 2:
+            return None
+
+        return int(parts[0]) * 60 + int(float(parts[1]))
 
 
 def run_import():

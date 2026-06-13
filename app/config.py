@@ -8,7 +8,7 @@ env = os.environ.get("ENV", "development")
 load_dotenv(f".env.{env}")
 load_dotenv(".env", override=False)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/tatuzinho_db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/tatuzinho_dev")
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
 DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
 
@@ -22,6 +22,12 @@ BACKFILL_YEARS = int(os.getenv("BACKFILL_YEARS", "2"))
 
 PREDICTION_MODEL_PATH = os.getenv("PREDICTION_MODEL_PATH", "/tmp/prediction_model.pkl")
 MIN_HISTORICAL_MATCHES = int(os.getenv("MIN_HISTORICAL_MATCHES", "5"))
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+AI_ANALYSIS_MODEL = os.getenv("AI_ANALYSIS_MODEL", "gpt-4.1-mini")
+AI_WEB_SEARCH_ENABLED = os.getenv("AI_WEB_SEARCH_ENABLED", "True").lower() == "true"
+AI_ANALYSIS_TIMEOUT_SECONDS = int(os.getenv("AI_ANALYSIS_TIMEOUT_SECONDS", "45"))
 
 
 class JSONFormatter(logging.Formatter):
